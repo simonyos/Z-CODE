@@ -1,0 +1,6 @@
+zcode
+*.exe
+.DS_Store
+
+OPENCODE_ARCHITECTURE.md
+LEARNING_ROADMAP.md
