@@ -175,8 +175,8 @@ func TestAgent_History(t *testing.T) {
 	agent := New(provider, alwaysConfirm)
 
 	ctx := context.Background()
-	agent.Chat(ctx, "First message")
-	agent.Chat(ctx, "Second message")
+	_, _ = agent.Chat(ctx, "First message")
+	_, _ = agent.Chat(ctx, "Second message")
 
 	history := agent.History()
 
@@ -197,7 +197,7 @@ func TestAgent_Reset(t *testing.T) {
 	agent := New(provider, alwaysConfirm)
 
 	ctx := context.Background()
-	agent.Chat(ctx, "Some message")
+	_, _ = agent.Chat(ctx, "Some message")
 
 	// Should have more than just system message now
 	if len(agent.messages) <= 1 {

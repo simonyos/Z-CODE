@@ -83,21 +83,7 @@ func (h *HelpDialog) View() string {
 }
 
 // PlaceOverlay places the dialog centered on the screen
-func PlaceOverlay(overlay, background string, bgWidth, bgHeight int) string {
-	// Simple center placement
-	overlayWidth := lipgloss.Width(overlay)
-	overlayHeight := lipgloss.Height(overlay)
-
-	x := (bgWidth - overlayWidth) / 2
-	y := (bgHeight - overlayHeight) / 2
-
-	if x < 0 {
-		x = 0
-	}
-	if y < 0 {
-		y = 0
-	}
-
+func PlaceOverlay(overlay, _ string, bgWidth, bgHeight int) string {
 	return lipgloss.Place(
 		bgWidth,
 		bgHeight,

@@ -196,9 +196,15 @@ func TestListDirTool(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create files and subdirectory
-	os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("test"), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "file2.go"), []byte("package main"), 0644)
-	os.Mkdir(filepath.Join(tmpDir, "subdir"), 0755)
+	if err := os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("test"), 0644); err != nil {
+		t.Fatalf("failed to create file1.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "file2.go"), []byte("package main"), 0644); err != nil {
+		t.Fatalf("failed to create file2.go: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(tmpDir, "subdir"), 0755); err != nil {
+		t.Fatalf("failed to create subdir: %v", err)
+	}
 
 	tool := NewListDirTool()
 	ctx := context.Background()

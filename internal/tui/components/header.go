@@ -75,14 +75,3 @@ func (h *Header) View() string {
 
 	return header
 }
-
-func repeatChar(char string, count int) string {
-	if count <= 0 {
-		return ""
-	}
-	result := ""
-	for i := 0; i < count; i++ {
-		result += char
-	}
-	return result
-}

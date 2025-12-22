@@ -234,7 +234,9 @@ func TestGetOpenAIKeyFromEnv(t *testing.T) {
 	}
 
 	// Set config value - should take precedence
-	Set("openai", "config-test-key")
+	if err := Set("openai", "config-test-key"); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
 	key = GetOpenAIKey()
 	if key != "config-test-key" {
 		t.Errorf("GetOpenAIKey() with config = %q, want %q", key, "config-test-key")

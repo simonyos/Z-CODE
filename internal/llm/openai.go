@@ -104,10 +104,7 @@ func NewOpenAIWithKey(apiKey, model string) *OpenAI {
 func (o *OpenAI) convertMessages(messages []Message) []openAIMessage {
 	result := make([]openAIMessage, 0, len(messages))
 	for _, msg := range messages {
-		result = append(result, openAIMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
+		result = append(result, openAIMessage(msg))
 	}
 	return result
 }
