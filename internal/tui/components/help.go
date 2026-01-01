@@ -1,6 +1,8 @@
 package components
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/simonyos/Z-CODE/internal/tui/theme"
 )
@@ -14,8 +16,8 @@ type HelpDialog struct {
 // NewHelpDialog creates a help dialog
 func NewHelpDialog() *HelpDialog {
 	return &HelpDialog{
-		Width:  50,
-		Height: 20,
+		Width:  55,
+		Height: 24,
 	}
 }
 
@@ -23,63 +25,94 @@ func NewHelpDialog() *HelpDialog {
 func (h *HelpDialog) View() string {
 	t := theme.Current
 
-	// Title
-	title := lipgloss.NewStyle().
+	// Header with icon
+	headerStyle := lipgloss.NewStyle().
 		Foreground(t.Primary).
-		Bold(true).
-		Render("Keyboard Shortcuts")
+		Bold(true)
+	title := headerStyle.Render("⚡ Z-Code Help")
 
-	// Shortcuts
-	shortcuts := []struct {
+	// Separator
+	sepStyle := lipgloss.NewStyle().
+		Foreground(t.Border)
+	separator := sepStyle.Render(strings.Repeat("─", h.Width-6))
+
+	// Keyboard shortcuts section
+	sectionStyle := lipgloss.NewStyle().
+		Foreground(t.Text).
+		Bold(true)
+	keyboardSection := sectionStyle.Render("Keyboard Shortcuts")
+
+	keyStyle := lipgloss.NewStyle().
+		Foreground(t.Primary).
+		Background(t.BackgroundSecondary).
+		Padding(0, 1)
+	descStyle := lipgloss.NewStyle().
+		Foreground(t.Text)
+
+	keyboardShortcuts := []struct {
 		key  string
 		desc string
 	}{
-		{"enter", "Send message"},
-		{"ctrl+c", "Quit"},
-		{"ctrl+l", "Clear chat"},
-		{"esc", "Cancel/Close"},
-		{"page up/down", "Scroll messages"},
-		{"", ""},
-		{"/help", "Show commands"},
-		{"/clear", "Clear history"},
-		{"/reset", "Reset conversation"},
-		{"/tools", "List tools"},
-		{"/quit", "Exit"},
+		{"Enter", "Send message"},
+		{"Ctrl+C", "Quit Z-Code"},
+		{"Ctrl+L", "Clear chat"},
+		{"Esc", "Cancel/Close"},
+		{"PgUp/PgDn", "Scroll messages"},
 	}
 
-	var content string
-	for _, s := range shortcuts {
-		if s.key == "" {
-			content += "\n"
-			continue
-		}
+	var keyContent string
+	for _, s := range keyboardShortcuts {
+		keyContent += keyStyle.Render(s.key) + " " + descStyle.Render(s.desc) + "\n"
+	}
 
-		key := lipgloss.NewStyle().
-			Foreground(t.Accent).
-			Bold(true).
-			Width(15).
-			Render(s.key)
+	// Commands section
+	commandSection := sectionStyle.Render("Slash Commands")
 
-		desc := lipgloss.NewStyle().
-			Foreground(t.Text).
-			Render(s.desc)
+	cmdStyle := lipgloss.NewStyle().
+		Foreground(t.Accent).
+		Bold(true)
 
-		content += key + desc + "\n"
+	commands := []struct {
+		cmd  string
+		desc string
+	}{
+		{"/help", "Show this help dialog"},
+		{"/clear", "Clear chat history"},
+		{"/reset", "Reset conversation context"},
+		{"/tools", "List available tools"},
+		{"/config", "View or set configuration"},
+		{"/quit", "Exit Z-Code"},
+	}
+
+	var cmdContent string
+	for _, c := range commands {
+		cmdContent += cmdStyle.Render(c.cmd) + " " + descStyle.Render(c.desc) + "\n"
 	}
 
 	// Footer
-	footer := lipgloss.NewStyle().
+	footerStyle := lipgloss.NewStyle().
 		Foreground(t.TextMuted).
-		Render("\nPress any key to close")
+		Italic(true)
+	footer := footerStyle.Render("Press any key to close")
 
-	// Container
+	// Build content
+	content := title + "\n" +
+		separator + "\n\n" +
+		keyboardSection + "\n" +
+		keyContent + "\n" +
+		commandSection + "\n" +
+		cmdContent + "\n" +
+		footer
+
+	// Container with subtle shadow effect
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(t.Primary).
+		Background(t.Background).
 		Padding(1, 2).
 		Width(h.Width)
 
-	return box.Render(title + "\n\n" + content + footer)
+	return box.Render(content)
 }
 
 // PlaceOverlay places the dialog centered on the screen

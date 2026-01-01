@@ -2,6 +2,8 @@ package components
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/simonyos/Z-CODE/internal/tui/theme"
@@ -32,36 +34,61 @@ func (h *Header) SetWidth(width int) {
 func (h *Header) View() string {
 	t := theme.Current
 
-	// Claude-style header with warm background
-	titleStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#D0D0D0")).
-		Background(t.Secondary).
-		Padding(0, 1).
+	// Logo/brand with Z icon
+	logoStyle := lipgloss.NewStyle().
+		Foreground(t.Primary).
 		Bold(true)
 
-	title := titleStyle.Render(" Z-Code TUI ")
+	logo := logoStyle.Render("⚡ Z-Code")
 
-	// Version badge
+	// Version badge - subtle pill style
 	versionStyle := lipgloss.NewStyle().
 		Foreground(t.TextMuted).
-		Render(fmt.Sprintf(" v%s", h.Version))
+		Background(t.BackgroundSecondary).
+		Padding(0, 1).
+		Render(fmt.Sprintf("v%s", h.Version))
 
-	// Working directory (truncated if too long)
-	cwd := h.CWD
-	maxCWDLen := h.Width - 30
-	if len(cwd) > maxCWDLen && maxCWDLen > 10 {
-		cwd = "..." + cwd[len(cwd)-maxCWDLen+3:]
+	// Working directory - show project name prominently with path
+	projectName := filepath.Base(h.CWD)
+	projectStyle := lipgloss.NewStyle().
+		Foreground(t.Text).
+		Bold(true)
+
+	// Show shortened path for context
+	parentDir := filepath.Dir(h.CWD)
+	maxParentLen := 25
+	if len(parentDir) > maxParentLen {
+		parentDir = "..." + parentDir[len(parentDir)-maxParentLen+3:]
 	}
 
-	cwdStyle := lipgloss.NewStyle().
-		Foreground(t.TextMuted).
-		Render(cwd)
+	pathStyle := lipgloss.NewStyle().
+		Foreground(t.TextMuted)
 
-	// Build header line
-	leftPart := lipgloss.JoinHorizontal(lipgloss.Center, title, versionStyle)
+	cwdDisplay := pathStyle.Render(parentDir+"/") + projectStyle.Render(projectName)
+
+	// Git branch indicator (placeholder - could be enhanced)
+	branchStyle := lipgloss.NewStyle().
+		Foreground(t.Success)
+	gitIndicator := branchStyle.Render("●")
+
+	// Build left section
+	leftPart := lipgloss.JoinHorizontal(
+		lipgloss.Center,
+		logo,
+		"  ",
+		versionStyle,
+	)
+
+	// Build right section
+	rightPart := lipgloss.JoinHorizontal(
+		lipgloss.Center,
+		gitIndicator,
+		" ",
+		cwdDisplay,
+	)
 
 	// Calculate spacing
-	spacing := h.Width - lipgloss.Width(leftPart) - lipgloss.Width(cwdStyle) - 2
+	spacing := h.Width - lipgloss.Width(leftPart) - lipgloss.Width(rightPart) - 2
 	if spacing < 1 {
 		spacing = 1
 	}
@@ -70,8 +97,14 @@ func (h *Header) View() string {
 		lipgloss.Center,
 		leftPart,
 		lipgloss.NewStyle().Width(spacing).Render(""),
-		cwdStyle,
+		rightPart,
 	)
 
-	return header
+	// Add a subtle separator line
+	separator := lipgloss.NewStyle().
+		Foreground(t.Border).
+		Width(h.Width).
+		Render(strings.Repeat("─", h.Width))
+
+	return header + "\n" + separator
 }

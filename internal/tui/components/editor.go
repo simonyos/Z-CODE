@@ -19,18 +19,22 @@ type Editor struct {
 
 // NewEditor creates a new editor component
 func NewEditor(width, height int) *Editor {
+	t := theme.Current
+
 	ta := textarea.New()
-	ta.Placeholder = "Describe your task..."
+	ta.Placeholder = "Ask me anything... (/ for commands)"
 	ta.Focus()
-	ta.Prompt = "┃ "
+	ta.Prompt = "› "
 	ta.SetWidth(width - 6) // Account for prompt and padding
 	ta.SetHeight(height - 2)
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
 
-	// Style the textarea - Claude aesthetic
+	// Style the textarea with modern aesthetic
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(theme.Current.TextMuted)
+	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(t.TextMuted)
+	ta.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(t.Primary).Bold(true)
+	ta.BlurredStyle.Prompt = lipgloss.NewStyle().Foreground(t.TextMuted)
 
 	return &Editor{
 		textarea: ta,
