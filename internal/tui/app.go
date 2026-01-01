@@ -19,6 +19,14 @@ import (
 
 const version = "0.1.0"
 
+// Layout constants for consistent height calculations
+const (
+	layoutHeaderHeight = 2 // Header row + separator line
+	layoutStatusHeight = 2 // Separator line + status bar
+	layoutEditorHeight = 5 // Input editor area
+	layoutPadding      = 1 // Extra padding for separators
+)
+
 // Message types for Bubble Tea
 type responseMsg struct {
 	result *agent.ChatResult
@@ -209,24 +217,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		// Layout dimensions
-		headerHeight := 2
-		statusHeight := 2
-		editorHeight := 5
-		messagesHeight := msg.Height - headerHeight - statusHeight - editorHeight
+		// Calculate messages area height using layout constants
+		messagesHeight := msg.Height - layoutHeaderHeight - layoutStatusHeight - layoutEditorHeight - layoutPadding
 
 		if !m.ready {
 			m.layout = layout.NewSplitPane(msg.Width, msg.Height)
 			m.messages = components.NewMessages(msg.Width, messagesHeight)
 			m.messages.SetWelcome(welcomeMessage())
-			m.editor = components.NewEditor(msg.Width, editorHeight)
+			m.editor = components.NewEditor(msg.Width, layoutEditorHeight)
 			// Clear any garbage that may have accumulated before init
 			m.editor.Reset()
 			m.ready = true
 		} else {
 			m.layout.SetSize(msg.Width, msg.Height)
 			m.messages.SetSize(msg.Width, messagesHeight)
-			m.editor.SetSize(msg.Width, editorHeight)
+			m.editor.SetSize(msg.Width, layoutEditorHeight)
 		}
 
 		m.header.SetWidth(msg.Width)
@@ -541,11 +546,8 @@ func (m Model) View() string {
 
 	t := theme.Current
 
-	// Calculate heights
-	headerHeight := 2
-	statusHeight := 2
-	editorHeight := 5
-	messagesHeight := m.height - headerHeight - statusHeight - editorHeight
+	// Calculate messages area height using layout constants
+	messagesHeight := m.height - layoutHeaderHeight - layoutStatusHeight - layoutEditorHeight - layoutPadding
 
 	// Header (fixed at top)
 	header := m.header.View()

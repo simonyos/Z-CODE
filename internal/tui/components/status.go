@@ -1,6 +1,8 @@
 package components
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/simonyos/Z-CODE/internal/tui/theme"
 )
@@ -46,31 +48,55 @@ func (s *Status) SetModel(model string) {
 func (s *Status) View() string {
 	t := theme.Current
 
-	// Minimalist status - just hints
-	hintStyle := lipgloss.NewStyle().
-		Foreground(t.TextMuted)
+	// Separator line
+	sepStyle := lipgloss.NewStyle().
+		Foreground(t.Border)
+	separator := sepStyle.Render(strings.Repeat("─", s.Width))
 
-	hint := hintStyle.Render("Enter to send · Ctrl+C to quit")
-
-	// Model badge
-	modelStyle := lipgloss.NewStyle().
+	// Left side: Keyboard hints with better formatting
+	hintKeyStyle := lipgloss.NewStyle().
 		Foreground(t.TextMuted).
 		Background(t.BackgroundSecondary).
 		Padding(0, 1)
-	modelBadge := modelStyle.Render(s.Model)
+	hintTextStyle := lipgloss.NewStyle().
+		Foreground(t.TextMuted)
 
-	// Thinking indicator or model
+	hints := []struct {
+		key  string
+		desc string
+	}{
+		{"Enter", "send"},
+		{"/", "commands"},
+		{"Ctrl+L", "clear"},
+		{"Ctrl+C", "quit"},
+	}
+
+	var hintParts []string
+	for _, h := range hints {
+		hintParts = append(hintParts, hintKeyStyle.Render(h.key)+hintTextStyle.Render(" "+h.desc))
+	}
+	hintBar := strings.Join(hintParts, hintTextStyle.Render("  "))
+
+	// Right side: Model and status
 	var rightContent string
 	if s.Thinking {
+		// Animated thinking indicator
 		thinkStyle := lipgloss.NewStyle().
-			Foreground(t.Primary)
-		rightContent = thinkStyle.Render("● thinking...")
+			Foreground(t.Primary).
+			Bold(true)
+		rightContent = thinkStyle.Render("◐ Processing...")
 	} else {
-		rightContent = modelBadge
+		// Model badge with icon
+		modelStyle := lipgloss.NewStyle().
+			Foreground(t.Primary).
+			Background(t.BackgroundSecondary).
+			Padding(0, 1).
+			Bold(true)
+		rightContent = modelStyle.Render("⚡ " + s.Model)
 	}
 
 	// Calculate spacing
-	leftWidth := lipgloss.Width(hint)
+	leftWidth := lipgloss.Width(hintBar)
 	rightWidth := lipgloss.Width(rightContent)
 	spacing := s.Width - leftWidth - rightWidth - 2
 
@@ -78,13 +104,13 @@ func (s *Status) View() string {
 		spacing = 0
 	}
 
-	// Build the bar
-	bar := lipgloss.JoinHorizontal(
+	// Build the status line
+	statusLine := lipgloss.JoinHorizontal(
 		lipgloss.Center,
-		hint,
+		hintBar,
 		lipgloss.NewStyle().Width(spacing).Render(""),
 		rightContent,
 	)
 
-	return bar
+	return separator + "\n" + statusLine
 }

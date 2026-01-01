@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/simonyos/Z-CODE/internal/llm"
 	"github.com/simonyos/Z-CODE/internal/tools"
@@ -11,6 +12,7 @@ import (
 
 // ToolExecution records a single tool call and its result
 type ToolExecution struct {
+	ID     string
 	Name   string
 	Args   string // Formatted args string for display
 	Result string
@@ -25,16 +27,20 @@ type ChatResult struct {
 
 // StreamEvent represents events during streaming chat
 type StreamEvent struct {
-	Type string // "start", "chunk", "tool_start", "tool_result", "done", "error"
+	Type string // "start", "chunk", "tool_start", "tool_result", "tool_batch_start", "tool_batch_end", "done", "error"
 
 	// For chunk events
 	Text string
 
 	// For tool events
+	ToolID     string
 	ToolName   string
 	ToolArgs   string
 	ToolResult string
 	ToolError  bool
+
+	// For batch events
+	BatchSize int
 
 	// For done event
 	FinalResponse string
@@ -43,7 +49,9 @@ type StreamEvent struct {
 	Error error
 }
 
-// EventHandler receives callbacks during agent execution
+// EventHandler receives callbacks during agent execution.
+// Implementations MUST be thread-safe as callbacks may be invoked
+// concurrently from multiple goroutines during parallel tool execution.
 type EventHandler interface {
 	OnThinking()
 	OnToolUse(name string, args map[string]any)
@@ -66,7 +74,10 @@ func New(provider llm.Provider, confirmFn tools.ConfirmFunc) *Agent {
 	reg.Register(tools.NewReadFileTool())
 	reg.Register(tools.NewListDirTool())
 	reg.Register(tools.NewWriteFileTool(confirmFn))
+	reg.Register(tools.NewEditTool(confirmFn))
 	reg.Register(tools.NewBashTool(confirmFn))
+	reg.Register(tools.NewGlobTool())
+	reg.Register(tools.NewGrepTool())
 
 	return &Agent{
 		provider: provider,
@@ -108,40 +119,44 @@ func (a *Agent) Chat(ctx context.Context, userMessage string) (*ChatResult, erro
 			return nil, err
 		}
 
-		// Try to parse as tool call
-		toolCall, err := tools.ParseToolCall(response)
-		if err == nil && toolCall != nil {
-			if a.handler != nil {
-				a.handler.OnToolUse(toolCall.Name, toolCall.Arguments)
+		// Try to parse as tool calls (supports multiple)
+		toolCalls, err := tools.ParseToolCalls(response)
+		if err == nil && len(toolCalls) > 0 {
+			// Execute tool calls (parallel if multiple)
+			execResults := a.executeToolCalls(ctx, toolCalls)
+
+			// Record all tool executions
+			for _, exec := range execResults {
+				result.ToolCalls = append(result.ToolCalls, exec)
 			}
 
-			toolResult := a.registry.Execute(ctx, *toolCall)
-
-			if a.handler != nil {
-				a.handler.OnToolResult(toolCall.Name, toolResult)
+			// Build XML results for message history
+			var xmlResults []struct {
+				ID     string
+				Name   string
+				Result tools.ToolResult
+			}
+			for _, exec := range execResults {
+				xmlResults = append(xmlResults, struct {
+					ID     string
+					Name   string
+					Result tools.ToolResult
+				}{
+					ID:   exec.ID,
+					Name: exec.Name,
+					Result: tools.ToolResult{
+						Success: exec.Error == "",
+						Output:  exec.Result,
+						Error:   exec.Error,
+					},
+				})
 			}
 
-			// Format args for display
-			argsStr := formatArgs(toolCall.Name, toolCall.Arguments)
-
-			// Record the tool execution
-			exec := ToolExecution{
-				Name:   toolCall.Name,
-				Args:   argsStr,
-				Result: toolResult.Output,
-				Error:  toolResult.Error,
-			}
-			result.ToolCalls = append(result.ToolCalls, exec)
-
-			// Add tool interaction to history
+			// Add tool interaction to history using XML format
 			a.messages = append(a.messages,
 				llm.Message{Role: "assistant", Content: response},
-				llm.Message{Role: "user", Content: fmt.Sprintf("Tool result: %s", toolResult.Output)},
+				llm.Message{Role: "user", Content: tools.FormatToolResults(xmlResults)},
 			)
-
-			if !toolResult.Success && toolResult.Error != "" {
-				a.messages[len(a.messages)-1].Content = fmt.Sprintf("Tool error: %s", toolResult.Error)
-			}
 
 			continue
 		}
@@ -153,6 +168,63 @@ func (a *Agent) Chat(ctx context.Context, userMessage string) (*ChatResult, erro
 	}
 
 	return nil, fmt.Errorf("max iterations reached")
+}
+
+// executeToolCalls executes multiple tool calls, in parallel if more than one
+func (a *Agent) executeToolCalls(ctx context.Context, toolCalls []tools.ToolCall) []ToolExecution {
+	if len(toolCalls) == 1 {
+		// Single tool call - execute directly
+		tc := toolCalls[0]
+		if a.handler != nil {
+			a.handler.OnToolUse(tc.Name, tc.Arguments)
+		}
+
+		toolResult := a.registry.Execute(ctx, tc)
+
+		if a.handler != nil {
+			a.handler.OnToolResult(tc.Name, toolResult)
+		}
+
+		return []ToolExecution{{
+			ID:     tc.ID,
+			Name:   tc.Name,
+			Args:   formatArgs(tc.Name, tc.Arguments),
+			Result: toolResult.Output,
+			Error:  toolResult.Error,
+		}}
+	}
+
+	// Multiple tool calls - execute in parallel
+	results := make([]ToolExecution, len(toolCalls))
+	var wg sync.WaitGroup
+
+	for i, tc := range toolCalls {
+		wg.Add(1)
+		go func(idx int, call tools.ToolCall) {
+			defer wg.Done()
+
+			if a.handler != nil {
+				a.handler.OnToolUse(call.Name, call.Arguments)
+			}
+
+			toolResult := a.registry.Execute(ctx, call)
+
+			if a.handler != nil {
+				a.handler.OnToolResult(call.Name, toolResult)
+			}
+
+			results[idx] = ToolExecution{
+				ID:     call.ID,
+				Name:   call.Name,
+				Args:   formatArgs(call.Name, call.Arguments),
+				Result: toolResult.Output,
+				Error:  toolResult.Error,
+			}
+		}(i, tc)
+	}
+
+	wg.Wait()
+	return results
 }
 
 // formatArgs creates a display string for tool arguments
@@ -170,11 +242,23 @@ func formatArgs(toolName string, args map[string]any) string {
 		if path, ok := args["path"].(string); ok {
 			return path
 		}
+	case "edit_file":
+		if path, ok := args["path"].(string); ok {
+			return path
+		}
 	case "list_dir":
 		if path, ok := args["path"].(string); ok {
 			return path
 		}
 		return "."
+	case "glob":
+		if pattern, ok := args["pattern"].(string); ok {
+			return pattern
+		}
+	case "grep":
+		if pattern, ok := args["pattern"].(string); ok {
+			return pattern
+		}
 	}
 	// Fallback: JSON representation
 	bytes, _ := json.Marshal(args)
@@ -191,7 +275,15 @@ func (a *Agent) Reset() {
 	a.messages = a.messages[:1] // Keep only system prompt
 }
 
-// ChatStream sends a message and streams the response through a channel
+// ChatStream sends a message and streams the response through a channel.
+// Unlike Chat(), tool calls are executed sequentially rather than in parallel.
+// This is intentional to ensure proper event ordering for streaming UI updates:
+// each tool_start event is followed by its corresponding tool_result before
+// the next tool begins, making the output easier to follow in real-time.
+//
+// When multiple tools are requested, tool_batch_start and tool_batch_end events
+// are emitted to indicate the grouping, but tools within the batch still execute
+// sequentially (not in parallel) for predictable streaming output.
 func (a *Agent) ChatStream(ctx context.Context, userMessage string) <-chan StreamEvent {
 	events := make(chan StreamEvent)
 
@@ -226,39 +318,73 @@ func (a *Agent) ChatStream(ctx context.Context, userMessage string) <-chan Strea
 				}
 			}
 
-			// Try to parse as tool call
-			toolCall, err := tools.ParseToolCall(fullResponse)
-			if err == nil && toolCall != nil {
-				// Format args for display
-				argsStr := formatArgs(toolCall.Name, toolCall.Arguments)
-
-				// Notify about tool start
-				events <- StreamEvent{
-					Type:     "tool_start",
-					ToolName: toolCall.Name,
-					ToolArgs: argsStr,
+			// Try to parse as tool calls (supports multiple)
+			toolCalls, err := tools.ParseToolCalls(fullResponse)
+			if err == nil && len(toolCalls) > 0 {
+				// Notify about batch start if multiple tools
+				if len(toolCalls) > 1 {
+					events <- StreamEvent{
+						Type:      "tool_batch_start",
+						BatchSize: len(toolCalls),
+					}
 				}
 
-				// Execute tool
-				toolResult := a.registry.Execute(ctx, *toolCall)
-
-				// Notify about tool result
-				events <- StreamEvent{
-					Type:       "tool_result",
-					ToolName:   toolCall.Name,
-					ToolResult: toolResult.Output,
-					ToolError:  !toolResult.Success,
+				// Execute tool calls and stream results
+				var xmlResults []struct {
+					ID     string
+					Name   string
+					Result tools.ToolResult
 				}
 
-				// Add tool interaction to history
+				for _, tc := range toolCalls {
+					// Format args for display
+					argsStr := formatArgs(tc.Name, tc.Arguments)
+
+					// Notify about tool start
+					events <- StreamEvent{
+						Type:     "tool_start",
+						ToolID:   tc.ID,
+						ToolName: tc.Name,
+						ToolArgs: argsStr,
+					}
+
+					// Execute tool
+					toolResult := a.registry.Execute(ctx, tc)
+
+					// Notify about tool result
+					events <- StreamEvent{
+						Type:       "tool_result",
+						ToolID:     tc.ID,
+						ToolName:   tc.Name,
+						ToolResult: toolResult.Output,
+						ToolError:  !toolResult.Success,
+					}
+
+					// Collect results for XML formatting
+					xmlResults = append(xmlResults, struct {
+						ID     string
+						Name   string
+						Result tools.ToolResult
+					}{
+						ID:     tc.ID,
+						Name:   tc.Name,
+						Result: toolResult,
+					})
+				}
+
+				// Notify about batch end if multiple tools
+				if len(toolCalls) > 1 {
+					events <- StreamEvent{
+						Type:      "tool_batch_end",
+						BatchSize: len(toolCalls),
+					}
+				}
+
+				// Add tool interaction to history using XML format
 				a.messages = append(a.messages,
 					llm.Message{Role: "assistant", Content: fullResponse},
-					llm.Message{Role: "user", Content: fmt.Sprintf("Tool result: %s", toolResult.Output)},
+					llm.Message{Role: "user", Content: tools.FormatToolResults(xmlResults)},
 				)
-
-				if !toolResult.Success && toolResult.Error != "" {
-					a.messages[len(a.messages)-1].Content = fmt.Sprintf("Tool error: %s", toolResult.Error)
-				}
 
 				continue
 			}

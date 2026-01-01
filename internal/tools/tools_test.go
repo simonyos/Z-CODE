@@ -8,72 +8,286 @@ import (
 	"testing"
 )
 
-func TestParseToolCall(t *testing.T) {
+func TestParseToolCalls_SingleXML(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     string
+		wantID    string
 		wantName  string
 		wantArgs  map[string]any
 		wantError bool
 	}{
 		{
-			name:     "simple tool call",
-			input:    `{"tool": "read_file", "path": "/tmp/test.txt"}`,
+			name: "simple tool call",
+			input: `<tool_call>
+  <id>call_1</id>
+  <name>read_file</name>
+  <parameters>
+    <path>/tmp/test.txt</path>
+  </parameters>
+</tool_call>`,
+			wantID:   "call_1",
 			wantName: "read_file",
 			wantArgs: map[string]any{"path": "/tmp/test.txt"},
 		},
 		{
-			name:     "tool call with surrounding text",
-			input:    `Let me read that file for you. {"tool": "read_file", "path": "/tmp/test.txt"} Done.`,
+			name: "tool call with surrounding text",
+			input: `Let me read that file for you.
+<tool_call>
+  <id>call_1</id>
+  <name>read_file</name>
+  <parameters>
+    <path>/tmp/test.txt</path>
+  </parameters>
+</tool_call>
+Done.`,
+			wantID:   "call_1",
 			wantName: "read_file",
 			wantArgs: map[string]any{"path": "/tmp/test.txt"},
 		},
 		{
-			name:     "tool call with multiple args",
-			input:    `{"tool": "write_file", "path": "/tmp/out.txt", "content": "hello"}`,
+			name: "tool call with multiple args",
+			input: `<tool_call>
+  <id>write_1</id>
+  <name>write_file</name>
+  <parameters>
+    <path>/tmp/out.txt</path>
+    <content>hello</content>
+  </parameters>
+</tool_call>`,
+			wantID:   "write_1",
 			wantName: "write_file",
 			wantArgs: map[string]any{"path": "/tmp/out.txt", "content": "hello"},
 		},
 		{
-			name:      "no JSON",
+			name:      "no XML",
 			input:     "Just a plain text response",
 			wantError: true,
 		},
 		{
-			name:      "JSON without tool field",
-			input:     `{"path": "/tmp/test.txt"}`,
+			name: "XML without name",
+			input: `<tool_call>
+  <id>call_1</id>
+  <parameters>
+    <path>/tmp/test.txt</path>
+  </parameters>
+</tool_call>`,
 			wantError: true,
 		},
 		{
-			name:      "incomplete JSON",
-			input:     `{"tool": "read_file", "path":`,
+			name: "XML without id",
+			input: `<tool_call>
+  <name>read_file</name>
+  <parameters>
+    <path>/tmp/test.txt</path>
+  </parameters>
+</tool_call>`,
 			wantError: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			call, err := ParseToolCall(tt.input)
+			calls, err := ParseToolCalls(tt.input)
 
 			if tt.wantError {
 				if err == nil {
-					t.Error("ParseToolCall() expected error, got nil")
+					t.Error("ParseToolCalls() expected error, got nil")
 				}
 				return
 			}
 
 			if err != nil {
-				t.Fatalf("ParseToolCall() error = %v", err)
+				t.Fatalf("ParseToolCalls() error = %v", err)
 			}
 
+			if len(calls) != 1 {
+				t.Fatalf("ParseToolCalls() returned %d calls, want 1", len(calls))
+			}
+
+			call := calls[0]
+			if call.ID != tt.wantID {
+				t.Errorf("ParseToolCalls() id = %q, want %q", call.ID, tt.wantID)
+			}
 			if call.Name != tt.wantName {
-				t.Errorf("ParseToolCall() name = %q, want %q", call.Name, tt.wantName)
+				t.Errorf("ParseToolCalls() name = %q, want %q", call.Name, tt.wantName)
 			}
 
 			for k, v := range tt.wantArgs {
 				if call.Arguments[k] != v {
-					t.Errorf("ParseToolCall() args[%q] = %v, want %v", k, call.Arguments[k], v)
+					t.Errorf("ParseToolCalls() args[%q] = %v, want %v", k, call.Arguments[k], v)
 				}
+			}
+		})
+	}
+}
+
+func TestParseToolCalls_MultipleXML(t *testing.T) {
+	input := `<tool_calls>
+  <tool_call>
+    <id>call_1</id>
+    <name>read_file</name>
+    <parameters>
+      <path>/src/main.go</path>
+    </parameters>
+  </tool_call>
+  <tool_call>
+    <id>call_2</id>
+    <name>list_dir</name>
+    <parameters>
+      <path>/src</path>
+    </parameters>
+  </tool_call>
+</tool_calls>`
+
+	calls, err := ParseToolCalls(input)
+	if err != nil {
+		t.Fatalf("ParseToolCalls() error = %v", err)
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("ParseToolCalls() returned %d calls, want 2", len(calls))
+	}
+
+	// Check first call
+	if calls[0].ID != "call_1" {
+		t.Errorf("calls[0].ID = %q, want %q", calls[0].ID, "call_1")
+	}
+	if calls[0].Name != "read_file" {
+		t.Errorf("calls[0].Name = %q, want %q", calls[0].Name, "read_file")
+	}
+	if calls[0].Arguments["path"] != "/src/main.go" {
+		t.Errorf("calls[0].Arguments[path] = %v, want %v", calls[0].Arguments["path"], "/src/main.go")
+	}
+
+	// Check second call
+	if calls[1].ID != "call_2" {
+		t.Errorf("calls[1].ID = %q, want %q", calls[1].ID, "call_2")
+	}
+	if calls[1].Name != "list_dir" {
+		t.Errorf("calls[1].Name = %q, want %q", calls[1].Name, "list_dir")
+	}
+	if calls[1].Arguments["path"] != "/src" {
+		t.Errorf("calls[1].Arguments[path] = %v, want %v", calls[1].Arguments["path"], "/src")
+	}
+}
+
+func TestParseToolCall_BackwardCompatibility(t *testing.T) {
+	// Test that the deprecated ParseToolCall still works
+	input := `<tool_call>
+  <id>call_1</id>
+  <name>read_file</name>
+  <parameters>
+    <path>/tmp/test.txt</path>
+  </parameters>
+</tool_call>`
+
+	call, err := ParseToolCall(input)
+	if err != nil {
+		t.Fatalf("ParseToolCall() error = %v", err)
+	}
+
+	if call.Name != "read_file" {
+		t.Errorf("ParseToolCall() name = %q, want %q", call.Name, "read_file")
+	}
+}
+
+func TestFormatToolResult(t *testing.T) {
+	tests := []struct {
+		name            string
+		id              string
+		toolName        string
+		result          ToolResult
+		wantContains    []string
+		wantContainsAny [][]string // For each inner slice, at least one must match
+	}{
+		{
+			name:     "success result",
+			id:       "call_1",
+			toolName: "read_file",
+			result:   ToolResult{Success: true, Output: "file contents here"},
+			wantContains: []string{
+				`id="call_1"`,
+				`name="read_file"`,
+				`success="true"`,
+				"<output>file contents here</output>",
+			},
+		},
+		{
+			name:     "error result",
+			id:       "call_2",
+			toolName: "read_file",
+			result:   ToolResult{Success: false, Error: "file not found"},
+			wantContains: []string{
+				`id="call_2"`,
+				`name="read_file"`,
+				`success="false"`,
+				"<error>file not found</error>",
+			},
+		},
+		{
+			name:     "escapes XML characters",
+			id:       "call_3",
+			toolName: "read_file",
+			result:   ToolResult{Success: true, Output: "<script>alert('xss')</script>"},
+			wantContains: []string{
+				"&lt;script&gt;",
+			},
+			wantContainsAny: [][]string{
+				{"&apos;xss&apos;", "&#39;xss&#39;"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := FormatToolResult(tt.id, tt.toolName, tt.result)
+			for _, want := range tt.wantContains {
+				if !strings.Contains(result, want) {
+					t.Errorf("FormatToolResult() = %q, want to contain %q", result, want)
+				}
+			}
+			for _, options := range tt.wantContainsAny {
+				found := false
+				for _, opt := range options {
+					if strings.Contains(result, opt) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("FormatToolResult() = %q, want to contain one of %v", result, options)
+				}
+			}
+		})
+	}
+}
+
+func TestEscapeXML(t *testing.T) {
+	tests := []struct {
+		input       string
+		wantOptions []string // Accept any of these (xml.EscapeText uses numeric refs)
+	}{
+		{"hello", []string{"hello"}},
+		{"<tag>", []string{"&lt;tag&gt;"}},
+		{"a & b", []string{"a &amp; b"}},
+		{`"quoted"`, []string{"&quot;quoted&quot;", "&#34;quoted&#34;"}},
+		{"it's", []string{"it&apos;s", "it&#39;s"}},
+		{"<a & 'b'>", []string{"&lt;a &amp; &apos;b&apos;&gt;", "&lt;a &amp; &#39;b&#39;&gt;"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := escapeXML(tt.input)
+			matched := false
+			for _, want := range tt.wantOptions {
+				if got == want {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				t.Errorf("escapeXML(%q) = %q, want one of %v", tt.input, got, tt.wantOptions)
 			}
 		})
 	}
@@ -419,10 +633,445 @@ func TestRegistry_BuildSystemPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "read_file") {
 		t.Error("BuildSystemPrompt() should contain 'read_file'")
 	}
-	if !strings.Contains(prompt, "TOOLS:") {
-		t.Error("BuildSystemPrompt() should contain 'TOOLS:'")
+	if !strings.Contains(prompt, "AVAILABLE TOOLS:") {
+		t.Error("BuildSystemPrompt() should contain 'AVAILABLE TOOLS:'")
 	}
-	if !strings.Contains(prompt, "RULES:") {
-		t.Error("BuildSystemPrompt() should contain 'RULES:'")
+	if !strings.Contains(prompt, "CODING GUIDELINES:") {
+		t.Error("BuildSystemPrompt() should contain 'CODING GUIDELINES:'")
+	}
+	// Check for XML format instructions
+	if !strings.Contains(prompt, "<tool_call>") {
+		t.Error("BuildSystemPrompt() should contain '<tool_call>' XML example")
+	}
+	if !strings.Contains(prompt, "<tool_calls>") {
+		t.Error("BuildSystemPrompt() should contain '<tool_calls>' for multiple tools")
+	}
+	if !strings.Contains(prompt, "<id>") {
+		t.Error("BuildSystemPrompt() should contain '<id>' element")
+	}
+}
+
+func TestEditTool(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "zcode-test-")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Always confirm
+	confirmFn := func(prompt string) bool { return true }
+	tool := NewEditTool(confirmFn)
+	ctx := context.Background()
+
+	// Create a test file
+	testFile := filepath.Join(tmpDir, "test.go")
+	originalContent := `package main
+
+func main() {
+	fmt.Println("Hello")
+}
+`
+	if err := os.WriteFile(testFile, []byte(originalContent), 0644); err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+
+	// Test successful edit
+	result := tool.Execute(ctx, map[string]any{
+		"path":       testFile,
+		"old_string": `fmt.Println("Hello")`,
+		"new_string": `fmt.Println("Hello, World!")`,
+	})
+	if !result.Success {
+		t.Errorf("Execute() success = false, error = %s", result.Error)
+	}
+
+	// Verify file was modified
+	data, err := os.ReadFile(testFile)
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
+	}
+	if !strings.Contains(string(data), `fmt.Println("Hello, World!")`) {
+		t.Errorf("file should contain new string, got: %s", string(data))
+	}
+
+	// Test old_string not found
+	result = tool.Execute(ctx, map[string]any{
+		"path":       testFile,
+		"old_string": "nonexistent string",
+		"new_string": "replacement",
+	})
+	if result.Success {
+		t.Error("Execute() should fail when old_string not found")
+	}
+	if !strings.Contains(result.Error, "not found") {
+		t.Errorf("error should mention 'not found', got: %s", result.Error)
+	}
+
+	// Test denied confirmation
+	denyFn := func(prompt string) bool { return false }
+	denyTool := NewEditTool(denyFn)
+	result = denyTool.Execute(ctx, map[string]any{
+		"path":       testFile,
+		"old_string": "Hello",
+		"new_string": "Hi",
+	})
+	if result.Success {
+		t.Error("Execute() should fail when confirmation is denied")
+	}
+}
+
+func TestEditTool_ContentPreservation(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "zcode-test-")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	confirmFn := func(prompt string) bool { return true }
+	tool := NewEditTool(confirmFn)
+	ctx := context.Background()
+
+	// Create a test file with content before and after the target string
+	testFile := filepath.Join(tmpDir, "preserve.go")
+	originalContent := `package main
+
+import "fmt"
+
+// This is the first section
+func first() {
+	fmt.Println("first")
+}
+
+// Target function to modify
+func target() {
+	fmt.Println("original")
+}
+
+// This is the last section
+func last() {
+	fmt.Println("last")
+}
+`
+	if err := os.WriteFile(testFile, []byte(originalContent), 0644); err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+
+	// Edit just the target function
+	result := tool.Execute(ctx, map[string]any{
+		"path":       testFile,
+		"old_string": `fmt.Println("original")`,
+		"new_string": `fmt.Println("modified")`,
+	})
+	if !result.Success {
+		t.Errorf("Execute() success = false, error = %s", result.Error)
+	}
+
+	// Read back and verify all content is preserved
+	data, err := os.ReadFile(testFile)
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
+	}
+	content := string(data)
+
+	// Check that unchanged sections are preserved
+	if !strings.Contains(content, `fmt.Println("first")`) {
+		t.Error("first function should be preserved")
+	}
+	if !strings.Contains(content, `fmt.Println("last")`) {
+		t.Error("last function should be preserved")
+	}
+	if !strings.Contains(content, "// This is the first section") {
+		t.Error("first comment should be preserved")
+	}
+	if !strings.Contains(content, "// This is the last section") {
+		t.Error("last comment should be preserved")
+	}
+	if !strings.Contains(content, `fmt.Println("modified")`) {
+		t.Error("target function should be modified")
+	}
+	if strings.Contains(content, `fmt.Println("original")`) {
+		t.Error("original text should be replaced")
+	}
+}
+
+func TestEditTool_MissingParameters(t *testing.T) {
+	confirmFn := func(prompt string) bool { return true }
+	tool := NewEditTool(confirmFn)
+	ctx := context.Background()
+
+	// Test missing path
+	result := tool.Execute(ctx, map[string]any{
+		"old_string": "foo",
+		"new_string": "bar",
+	})
+	if result.Success {
+		t.Error("Execute() should fail when path is missing")
+	}
+	if !strings.Contains(result.Error, "path") {
+		t.Errorf("error should mention 'path', got: %s", result.Error)
+	}
+
+	// Test missing old_string
+	result = tool.Execute(ctx, map[string]any{
+		"path":       "/tmp/test.txt",
+		"new_string": "bar",
+	})
+	if result.Success {
+		t.Error("Execute() should fail when old_string is missing")
+	}
+	if !strings.Contains(result.Error, "old_string") {
+		t.Errorf("error should mention 'old_string', got: %s", result.Error)
+	}
+
+	// Test missing new_string
+	result = tool.Execute(ctx, map[string]any{
+		"path":       "/tmp/test.txt",
+		"old_string": "foo",
+	})
+	if result.Success {
+		t.Error("Execute() should fail when new_string is missing")
+	}
+	if !strings.Contains(result.Error, "new_string") {
+		t.Errorf("error should mention 'new_string', got: %s", result.Error)
+	}
+}
+
+func TestEditTool_NonUnique(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "zcode-test-")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	confirmFn := func(prompt string) bool { return true }
+	tool := NewEditTool(confirmFn)
+	ctx := context.Background()
+
+	// Create file with duplicate strings
+	testFile := filepath.Join(tmpDir, "dup.go")
+	content := `func test() {
+	hello()
+	hello()
+}
+`
+	if err := os.WriteFile(testFile, []byte(content), 0644); err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+
+	// Test that non-unique old_string fails
+	result := tool.Execute(ctx, map[string]any{
+		"path":       testFile,
+		"old_string": "hello()",
+		"new_string": "world()",
+	})
+	if result.Success {
+		t.Error("Execute() should fail when old_string is not unique")
+	}
+	if !strings.Contains(result.Error, "not unique") && !strings.Contains(result.Error, "2 times") {
+		t.Errorf("error should mention non-uniqueness, got: %s", result.Error)
+	}
+}
+
+func TestGlobTool(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "zcode-test-")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create test files
+	if err := os.WriteFile(filepath.Join(tmpDir, "file1.go"), []byte("package main"), 0644); err != nil {
+		t.Fatalf("failed to create file1.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "file2.go"), []byte("package main"), 0644); err != nil {
+		t.Fatalf("failed to create file2.go: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte("hello"), 0644); err != nil {
+		t.Fatalf("failed to create test.txt: %v", err)
+	}
+
+	// Create subdirectory with files
+	subDir := filepath.Join(tmpDir, "sub")
+	if err := os.Mkdir(subDir, 0755); err != nil {
+		t.Fatalf("failed to create subdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "nested.go"), []byte("package sub"), 0644); err != nil {
+		t.Fatalf("failed to create nested.go: %v", err)
+	}
+
+	tool := NewGlobTool()
+	ctx := context.Background()
+
+	// Test simple glob pattern
+	result := tool.Execute(ctx, map[string]any{
+		"pattern": "*.go",
+		"path":    tmpDir,
+	})
+	if !result.Success {
+		t.Errorf("Execute() success = false, error = %s", result.Error)
+	}
+	if !strings.Contains(result.Output, "file1.go") {
+		t.Errorf("output should contain file1.go, got: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "file2.go") {
+		t.Errorf("output should contain file2.go, got: %s", result.Output)
+	}
+	if strings.Contains(result.Output, "test.txt") {
+		t.Error("output should not contain test.txt for *.go pattern")
+	}
+
+	// Test recursive pattern
+	result = tool.Execute(ctx, map[string]any{
+		"pattern": "**/*.go",
+		"path":    tmpDir,
+	})
+	if !result.Success {
+		t.Errorf("Execute() success = false, error = %s", result.Error)
+	}
+	if !strings.Contains(result.Output, "nested.go") {
+		t.Errorf("recursive pattern should find nested.go, got: %s", result.Output)
+	}
+
+	// Test no matches
+	result = tool.Execute(ctx, map[string]any{
+		"pattern": "*.xyz",
+		"path":    tmpDir,
+	})
+	if !result.Success {
+		t.Errorf("Execute() with no matches should succeed, error = %s", result.Error)
+	}
+	if !strings.Contains(result.Output, "No files") {
+		t.Errorf("output should indicate no matches, got: %s", result.Output)
+	}
+}
+
+func TestGrepTool(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "zcode-test-")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create test files with content
+	file1 := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(file1, []byte(`package main
+
+func main() {
+	fmt.Println("Hello World")
+}
+`), 0644); err != nil {
+		t.Fatalf("failed to create main.go: %v", err)
+	}
+
+	file2 := filepath.Join(tmpDir, "util.go")
+	if err := os.WriteFile(file2, []byte(`package main
+
+func helper() {
+	fmt.Println("Helper function")
+}
+`), 0644); err != nil {
+		t.Fatalf("failed to create util.go: %v", err)
+	}
+
+	tool := NewGrepTool()
+	ctx := context.Background()
+
+	// Test simple pattern
+	result := tool.Execute(ctx, map[string]any{
+		"pattern": "Println",
+		"path":    tmpDir,
+	})
+	if !result.Success {
+		t.Errorf("Execute() success = false, error = %s", result.Error)
+	}
+	if !strings.Contains(result.Output, "main.go") {
+		t.Errorf("output should contain main.go, got: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, "util.go") {
+		t.Errorf("output should contain util.go, got: %s", result.Output)
+	}
+
+	// Test with glob filter
+	result = tool.Execute(ctx, map[string]any{
+		"pattern": "Println",
+		"path":    tmpDir,
+		"glob":    "main.go",
+	})
+	if !result.Success {
+		t.Errorf("Execute() success = false, error = %s", result.Error)
+	}
+	if !strings.Contains(result.Output, "main.go") {
+		t.Errorf("output should contain main.go, got: %s", result.Output)
+	}
+	if strings.Contains(result.Output, "util.go") {
+		t.Error("output should not contain util.go when filtering by main.go")
+	}
+
+	// Test no matches
+	result = tool.Execute(ctx, map[string]any{
+		"pattern": "nonexistent_pattern",
+		"path":    tmpDir,
+	})
+	if !result.Success {
+		t.Errorf("Execute() with no matches should succeed, error = %s", result.Error)
+	}
+	if !strings.Contains(result.Output, "No matches") {
+		t.Errorf("output should indicate no matches, got: %s", result.Output)
+	}
+
+	// Test regex pattern
+	result = tool.Execute(ctx, map[string]any{
+		"pattern": "func\\s+\\w+",
+		"path":    tmpDir,
+	})
+	if !result.Success {
+		t.Errorf("Execute() with regex should succeed, error = %s", result.Error)
+	}
+	if !strings.Contains(result.Output, "func main") || !strings.Contains(result.Output, "func helper") {
+		t.Errorf("output should contain function matches, got: %s", result.Output)
+	}
+
+	// Test case insensitive search
+	result = tool.Execute(ctx, map[string]any{
+		"pattern":          "hello",
+		"path":             tmpDir,
+		"case_insensitive": true,
+	})
+	if !result.Success {
+		t.Errorf("Execute() case insensitive should succeed, error = %s", result.Error)
+	}
+	if !strings.Contains(result.Output, "Hello World") {
+		t.Errorf("case insensitive should match Hello, got: %s", result.Output)
+	}
+}
+
+func TestGrepTool_SingleFile(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "zcode-test-")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testFile := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("line one\nline two\nline three\n"), 0644); err != nil {
+		t.Fatalf("failed to create test file: %v", err)
+	}
+
+	tool := NewGrepTool()
+	ctx := context.Background()
+
+	// Test grep on single file
+	result := tool.Execute(ctx, map[string]any{
+		"pattern": "two",
+		"path":    testFile,
+	})
+	if !result.Success {
+		t.Errorf("Execute() success = false, error = %s", result.Error)
+	}
+	if !strings.Contains(result.Output, "line two") {
+		t.Errorf("output should contain 'line two', got: %s", result.Output)
+	}
+	if !strings.Contains(result.Output, ":2:") {
+		t.Errorf("output should contain line number ':2:', got: %s", result.Output)
 	}
 }

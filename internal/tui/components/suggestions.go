@@ -108,33 +108,56 @@ func (s *Suggestions) View() string {
 
 	var sb strings.Builder
 
+	// Header
+	headerStyle := lipgloss.NewStyle().
+		Foreground(t.TextMuted).
+		Italic(true)
+	sb.WriteString(headerStyle.Render("Commands") + "\n")
+
 	for i, cmd := range s.commands {
+		// Command name with icon
+		iconStyle := lipgloss.NewStyle().
+			Foreground(t.Primary)
+
 		nameStyle := lipgloss.NewStyle().
 			Foreground(t.Accent).
 			Bold(true).
-			Width(10)
+			Width(12)
 
 		descStyle := lipgloss.NewStyle().
 			Foreground(t.TextMuted)
 
-		row := nameStyle.Render(cmd.Name) + " " + descStyle.Render(cmd.Description)
+		icon := "  "
+		if i == s.selected {
+			icon = "› "
+		}
+
+		row := iconStyle.Render(icon) + nameStyle.Render(cmd.Name) + descStyle.Render(cmd.Description)
 
 		if i == s.selected {
 			row = lipgloss.NewStyle().
 				Background(t.BackgroundSecondary).
-				Width(s.width - 4).
+				Foreground(t.Text).
+				Width(s.width - 6).
 				Render(row)
 		}
 
 		sb.WriteString(row + "\n")
 	}
 
+	// Footer hint
+	footerStyle := lipgloss.NewStyle().
+		Foreground(t.TextMuted).
+		Italic(true)
+	sb.WriteString(footerStyle.Render("↑↓ navigate • Tab to complete • Esc to cancel"))
+
 	// Container
 	container := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.Border).
+		BorderForeground(t.Primary).
+		Background(t.Background).
 		Padding(0, 1).
 		Width(s.width - 2)
 
-	return container.Render(strings.TrimSuffix(sb.String(), "\n"))
+	return container.Render(sb.String())
 }

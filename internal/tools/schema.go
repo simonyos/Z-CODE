@@ -16,8 +16,11 @@ type ToolDefinition struct {
 	Parameters  *JSONSchema `json:"parameters"`
 }
 
-// ToolCall represents a parsed tool invocation
+// ToolCall represents a parsed tool invocation.
+// Note: JSON tags are retained for potential future API serialization,
+// but tool calls are currently parsed from XML format (see registry.go).
 type ToolCall struct {
+	ID        string         `json:"id"`
 	Name      string         `json:"name"`
 	Arguments map[string]any `json:"arguments"`
 }

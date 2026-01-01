@@ -125,25 +125,64 @@ func (m *Messages) updateContent() {
 
 	// Show welcome message if no messages
 	if len(m.messages) == 0 && m.welcome != "" {
-		// Warm welcome header
-		welcomeHeader := lipgloss.NewStyle().
-			Foreground(t.TextInverse).
-			Background(t.Primary).
-			Padding(0, 1).
+		// Centered welcome with ASCII art logo
+		logoStyle := lipgloss.NewStyle().
+			Foreground(t.Primary).
 			Bold(true)
-		sb.WriteString(welcomeHeader.Render(" Welcome ") + "\n\n")
 
-		// Tips in muted style
-		tipsStyle := lipgloss.NewStyle().
+		logo := `
+   ███████╗       ██████╗ ██████╗ ██████╗ ███████╗
+   ╚══███╔╝      ██╔════╝██╔═══██╗██╔══██╗██╔════╝
+     ███╔╝ █████╗██║     ██║   ██║██║  ██║█████╗
+    ███╔╝  ╚════╝██║     ██║   ██║██║  ██║██╔══╝
+   ███████╗      ╚██████╗╚██████╔╝██████╔╝███████╗
+   ╚══════╝       ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝`
+
+		sb.WriteString(logoStyle.Render(logo) + "\n\n")
+
+		// Tagline
+		taglineStyle := lipgloss.NewStyle().
+			Foreground(t.Text).
+			Bold(true)
+		sb.WriteString(taglineStyle.Render("   AI-Powered Coding Assistant") + "\n\n")
+
+		// Separator
+		sepStyle := lipgloss.NewStyle().
+			Foreground(t.Border)
+		sb.WriteString(sepStyle.Render("   " + strings.Repeat("─", 40)) + "\n\n")
+
+		// Quick start tips with icons
+		tipHeaderStyle := lipgloss.NewStyle().
+			Foreground(t.Primary).
+			Bold(true)
+		sb.WriteString(tipHeaderStyle.Render("   Quick Start") + "\n\n")
+
+		tipStyle := lipgloss.NewStyle().
 			Foreground(t.TextMuted)
-		tips := `  I'm Claude, your AI coding assistant.
+		iconStyle := lipgloss.NewStyle().
+			Foreground(t.Accent)
 
-  • Describe what you'd like to build or fix
-  • Ask me to read, write, or run commands
-  • Type /help for available commands
+		tips := []struct {
+			icon string
+			text string
+		}{
+			{"📝", "Describe what you want to build or fix"},
+			{"📖", "Ask me to read and explain code"},
+			{"⚡", "Let me run commands and edit files"},
+			{"🔍", "Search the codebase with glob and grep"},
+		}
 
-  What can I help you with?`
-		sb.WriteString(tipsStyle.Render(tips))
+		for _, tip := range tips {
+			sb.WriteString("   " + iconStyle.Render(tip.icon) + " " + tipStyle.Render(tip.text) + "\n")
+		}
+
+		sb.WriteString("\n")
+
+		// Commands hint
+		cmdStyle := lipgloss.NewStyle().
+			Foreground(t.TextMuted).
+			Italic(true)
+		sb.WriteString(cmdStyle.Render("   Type /help for commands • Enter to send") + "\n")
 
 		m.viewport.SetContent(sb.String())
 		return
@@ -152,28 +191,30 @@ func (m *Messages) updateContent() {
 	for _, msg := range m.messages {
 		switch msg.Role {
 		case "user":
-			// User message - Claude style with header badge
-			headerStyle := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#E0E0E0")).
-				Background(lipgloss.Color("#4D4D4D")).
-				Padding(0, 1).
+			// User message with avatar-style icon
+			iconStyle := lipgloss.NewStyle().
+				Foreground(t.Info).
 				Bold(true)
-			sb.WriteString(headerStyle.Render("YOU") + "\n")
+			headerStyle := lipgloss.NewStyle().
+				Foreground(t.Text).
+				Bold(true)
+			sb.WriteString(iconStyle.Render("◉") + " " + headerStyle.Render("You") + "\n")
 
 			bodyStyle := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#E0E0E0")).
-				PaddingLeft(1).
+				Foreground(t.Text).
+				PaddingLeft(2).
 				Width(contentWidth)
 			sb.WriteString(bodyStyle.Render(msg.Content) + "\n\n")
 
 		case "assistant":
-			// Assistant message - Claude style with warm accent header
-			headerStyle := lipgloss.NewStyle().
-				Foreground(t.TextInverse).
-				Background(t.Primary).
-				Padding(0, 1).
+			// Assistant message with Z-Code branding
+			iconStyle := lipgloss.NewStyle().
+				Foreground(t.Primary).
 				Bold(true)
-			sb.WriteString(headerStyle.Render("CLAUDE") + "\n")
+			headerStyle := lipgloss.NewStyle().
+				Foreground(t.Primary).
+				Bold(true)
+			sb.WriteString(iconStyle.Render("⚡") + " " + headerStyle.Render("Z-Code") + "\n")
 
 			// Render markdown
 			rendered := msg.Content
@@ -185,68 +226,98 @@ func (m *Messages) updateContent() {
 
 			bodyStyle := lipgloss.NewStyle().
 				Foreground(t.Text).
-				PaddingLeft(1).
+				PaddingLeft(2).
 				Width(contentWidth)
 			sb.WriteString(bodyStyle.Render(rendered) + "\n\n")
 
 		case "tool":
-			// Tool call - subtle styling
-			toolHeader := lipgloss.NewStyle().
-				Foreground(t.TextMuted).
-				Background(t.BackgroundSecondary).
-				Padding(0, 1).
-				Italic(true)
-			sb.WriteString(toolHeader.Render("⚡ "+msg.ToolName) + "\n")
+			// Tool execution with progress-style indicator
+			isRunning := msg.Content == "Running..."
+			isError := strings.HasPrefix(msg.Content, "Error:")
 
-			// Command/args
-			if msg.ToolArgs != "" {
-				cmdStyle := lipgloss.NewStyle().
-					Foreground(t.TextMuted).
-					PaddingLeft(2)
-				sb.WriteString(cmdStyle.Render("$ "+msg.ToolArgs) + "\n")
+			var statusIcon string
+			var statusColor lipgloss.Color
+			if isRunning {
+				statusIcon = "◐"
+				statusColor = t.Warning
+			} else if isError {
+				statusIcon = "✗"
+				statusColor = t.Error
+			} else {
+				statusIcon = "✓"
+				statusColor = t.Success
 			}
 
-			// Result
-			if msg.Content != "" {
+			// Tool header with status
+			iconStyle := lipgloss.NewStyle().
+				Foreground(statusColor).
+				Bold(true)
+			toolNameStyle := lipgloss.NewStyle().
+				Foreground(t.TextMuted).
+				Bold(true)
+
+			sb.WriteString("  " + iconStyle.Render(statusIcon) + " " + toolNameStyle.Render(msg.ToolName))
+
+			// Command/args inline
+			if msg.ToolArgs != "" {
+				argsStyle := lipgloss.NewStyle().
+					Foreground(t.TextMuted)
+				sb.WriteString(argsStyle.Render(" → " + msg.ToolArgs))
+			}
+			sb.WriteString("\n")
+
+			// Result (if not running and has content)
+			if !isRunning && msg.Content != "" {
 				result := msg.Content
-				if len(result) > 500 {
-					result = result[:500] + "\n... (truncated)"
+				maxResultLen := 300
+				if len(result) > maxResultLen {
+					result = result[:maxResultLen] + "\n    ⋯ (truncated)"
 				}
 
 				resultStyle := lipgloss.NewStyle().
 					Foreground(t.TextMuted).
-					PaddingLeft(2).
-					Width(contentWidth - 4)
+					PaddingLeft(4).
+					Width(contentWidth - 6)
+
+				// Add a subtle box for output
+				boxStyle := lipgloss.NewStyle().
+					Foreground(t.Border).
+					PaddingLeft(4)
+				sb.WriteString(boxStyle.Render("│") + "\n")
 				sb.WriteString(resultStyle.Render(result) + "\n")
 			}
 			sb.WriteString("\n")
 
 		case "system":
-			// System message - subtle centered
+			// System message with info icon
+			iconStyle := lipgloss.NewStyle().
+				Foreground(t.Info)
 			sysStyle := lipgloss.NewStyle().
 				Foreground(t.TextMuted).
-				Italic(true).
-				PaddingLeft(1)
-			sb.WriteString(sysStyle.Render("— "+msg.Content+" —") + "\n\n")
+				Italic(true)
+			sb.WriteString(iconStyle.Render("ℹ") + " " + sysStyle.Render(msg.Content) + "\n\n")
 
 		case "error":
-			// Error message
-			errStyle := lipgloss.NewStyle().
+			// Error message with clear visual treatment
+			iconStyle := lipgloss.NewStyle().
 				Foreground(t.Error).
 				Bold(true)
-			sb.WriteString(errStyle.Render("✗ "+msg.Content) + "\n\n")
+			errStyle := lipgloss.NewStyle().
+				Foreground(t.Error)
+			sb.WriteString(iconStyle.Render("✗") + " " + errStyle.Render(msg.Content) + "\n\n")
 		}
 	}
 
 	// Show streaming content if any
 	if m.streamingContent != "" {
-		// Claude style header for streaming
-		headerStyle := lipgloss.NewStyle().
-			Foreground(t.TextInverse).
-			Background(t.Primary).
-			Padding(0, 1).
+		// Z-Code style header for streaming
+		iconStyle := lipgloss.NewStyle().
+			Foreground(t.Primary).
 			Bold(true)
-		sb.WriteString(headerStyle.Render("CLAUDE") + "\n")
+		headerStyle := lipgloss.NewStyle().
+			Foreground(t.Primary).
+			Bold(true)
+		sb.WriteString(iconStyle.Render("⚡") + " " + headerStyle.Render("Z-Code") + "\n")
 
 		// Render streaming content with markdown
 		rendered := m.streamingContent
@@ -258,9 +329,14 @@ func (m *Messages) updateContent() {
 
 		bodyStyle := lipgloss.NewStyle().
 			Foreground(t.Text).
-			PaddingLeft(1).
+			PaddingLeft(2).
 			Width(contentWidth)
-		sb.WriteString(bodyStyle.Render(rendered+"▌") + "\n\n") // Cursor indicator
+
+		// Blinking cursor effect
+		cursorStyle := lipgloss.NewStyle().
+			Foreground(t.Primary).
+			Bold(true)
+		sb.WriteString(bodyStyle.Render(rendered) + cursorStyle.Render("▌") + "\n\n")
 	}
 
 	m.viewport.SetContent(sb.String())
