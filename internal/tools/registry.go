@@ -80,7 +80,7 @@ func (r *Registry) BuildSystemPrompt() string {
 	sb.WriteString("- Read files before modifying them to understand context\n")
 	sb.WriteString("- Use glob and grep to explore the codebase before making changes\n")
 	sb.WriteString("- Keep changes minimal and focused on the task\n")
-	sb.WriteString("- Don't add unnecessary comments, logging, or error handling\n")
+	sb.WriteString("- Avoid excessive or redundant comments, logging, or error handling; include appropriate error checks where needed\n")
 	sb.WriteString("- Follow the existing code style and patterns in the project\n")
 	sb.WriteString("- Be careful with destructive operations (file writes, shell commands)\n\n")
 

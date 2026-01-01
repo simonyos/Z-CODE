@@ -65,10 +65,16 @@ func (t *GlobTool) Execute(ctx context.Context, args map[string]any) ToolResult 
 	}
 
 	var matches []string
+	var warning string
 
 	// Handle ** pattern (recursive)
 	if strings.Contains(pattern, "**") {
 		matches, err = globRecursive(absPath, pattern)
+		// Check if this is just a "skipped paths" warning (not a hard error)
+		if err != nil && strings.Contains(err.Error(), "skipped") {
+			warning = err.Error()
+			err = nil
+		}
 	} else {
 		// Simple glob
 		fullPattern := filepath.Join(absPath, pattern)
@@ -107,15 +113,26 @@ func (t *GlobTool) Execute(ctx context.Context, args map[string]any) ToolResult 
 		output += fmt.Sprintf("\n... and %d more files", len(relMatches)-maxMatches)
 	}
 
+	result := fmt.Sprintf("Found %d files:\n%s", len(relMatches), output)
+	if warning != "" {
+		result += fmt.Sprintf("\n\nNote: %s", warning)
+	}
+
 	return ToolResult{
 		Success: true,
-		Output:  fmt.Sprintf("Found %d files:\n%s", len(relMatches), output),
+		Output:  result,
 	}
+}
+
+// globResult holds matches and metadata from recursive glob
+type globResult struct {
+	matches      []string
+	skippedCount int
 }
 
 // globRecursive handles ** patterns for recursive matching
 func globRecursive(basePath, pattern string) ([]string, error) {
-	var matches []string
+	result := &globResult{}
 
 	// Split pattern by **
 	parts := strings.SplitN(pattern, "**", 2)
@@ -132,11 +149,11 @@ func globRecursive(basePath, pattern string) ([]string, error) {
 	}
 
 	// Walk the directory tree
-	// Note: Permission errors and other file access issues are silently skipped
-	// to provide best-effort results rather than failing on inaccessible files
 	err := filepath.Walk(startPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // Skip errors (permission denied, broken symlinks, etc.)
+			// Track permission errors and other access issues
+			result.skippedCount++
+			return nil
 		}
 
 		// Skip hidden directories
@@ -150,7 +167,7 @@ func globRecursive(basePath, pattern string) ([]string, error) {
 
 		// Check if file matches the suffix pattern
 		if suffix == "" {
-			matches = append(matches, path)
+			result.matches = append(result.matches, path)
 			return nil
 		}
 
@@ -165,11 +182,16 @@ func globRecursive(basePath, pattern string) ([]string, error) {
 		matchedPath, _ := filepath.Match(suffix, relPath)
 
 		if matched || matchedPath {
-			matches = append(matches, path)
+			result.matches = append(result.matches, path)
 		}
 
 		return nil
 	})
 
-	return matches, err
+	// If some paths were skipped, wrap the error with additional info
+	if result.skippedCount > 0 && err == nil {
+		err = fmt.Errorf("skipped %d inaccessible paths", result.skippedCount)
+	}
+
+	return result.matches, err
 }

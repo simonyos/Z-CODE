@@ -182,7 +182,7 @@ func (m *Messages) updateContent() {
 		cmdStyle := lipgloss.NewStyle().
 			Foreground(t.TextMuted).
 			Italic(true)
-		sb.WriteString(cmdStyle.Render("   Type /help for commands • Enter to send") + "\n")
+		sb.WriteString(cmdStyle.Render(`   Commands start with "/" (e.g. /help) • Enter to send`) + "\n")
 
 		m.viewport.SetContent(sb.String())
 		return

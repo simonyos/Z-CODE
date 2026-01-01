@@ -97,9 +97,15 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ToolResult 
 	}
 
 	var matches []GrepMatch
+	var warning string
 
 	if info.IsDir() {
 		matches, err = grepDirectory(absPath, re, globPattern)
+		// Check if this is just a "skipped files" warning (not a hard error)
+		if err != nil && strings.Contains(err.Error(), "skipped") {
+			warning = err.Error()
+			err = nil
+		}
 	} else {
 		matches, err = grepFile(absPath, re)
 	}
@@ -140,19 +146,30 @@ func (t *GrepTool) Execute(ctx context.Context, args map[string]any) ToolResult 
 		sb.WriteString(fmt.Sprintf("%s:%d: %s\n", match.File, match.Line, content))
 	}
 
+	if warning != "" {
+		sb.WriteString(fmt.Sprintf("\nNote: %s", warning))
+	}
+
 	return ToolResult{
 		Success: true,
 		Output:  sb.String(),
 	}
 }
 
+// grepDirResult holds matches and metadata from directory grep
+type grepDirResult struct {
+	matches      []GrepMatch
+	skippedCount int
+}
+
 // grepDirectory searches all files in a directory
 func grepDirectory(dirPath string, re *regexp.Regexp, globPattern string) ([]GrepMatch, error) {
-	var allMatches []GrepMatch
+	result := &grepDirResult{}
 
 	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // Skip errors
+			result.skippedCount++
+			return nil // Skip errors but track them
 		}
 
 		// Skip hidden directories
@@ -189,7 +206,8 @@ func grepDirectory(dirPath string, re *regexp.Regexp, globPattern string) ([]Gre
 		// Search this file
 		matches, err := grepFile(path, re)
 		if err != nil {
-			return nil // Skip files we can't read
+			result.skippedCount++
+			return nil // Skip files we can't read but track them
 		}
 
 		// Convert to relative paths
@@ -200,16 +218,20 @@ func grepDirectory(dirPath string, re *regexp.Regexp, globPattern string) ([]Gre
 			}
 		}
 
-		allMatches = append(allMatches, matches...)
+		result.matches = append(result.matches, matches...)
 		return nil
 	})
 
-	return allMatches, err
+	// If some paths were skipped, wrap the error with additional info
+	if result.skippedCount > 0 && err == nil {
+		err = fmt.Errorf("skipped %d inaccessible files", result.skippedCount)
+	}
+
+	return result.matches, err
 }
 
 // grepFile searches a single file.
-// Note: Uses bufio.Scanner with default 64KB max line size.
-// Files with lines longer than this (e.g., minified JS) may not be fully searched.
+// Uses a 1MB buffer to handle files with long lines (e.g., minified JS).
 func grepFile(filePath string, re *regexp.Regexp) ([]GrepMatch, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -219,6 +241,10 @@ func grepFile(filePath string, re *regexp.Regexp) ([]GrepMatch, error) {
 
 	var matches []GrepMatch
 	scanner := bufio.NewScanner(file)
+	// Increase buffer size to 1MB to handle minified files
+	const maxScanTokenSize = 1024 * 1024 // 1MB
+	buf := make([]byte, maxScanTokenSize)
+	scanner.Buffer(buf, maxScanTokenSize)
 	lineNum := 0
 
 	for scanner.Scan() {
@@ -234,7 +260,12 @@ func grepFile(filePath string, re *regexp.Regexp) ([]GrepMatch, error) {
 		}
 	}
 
-	return matches, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		// Return partial matches with a note about the error
+		return matches, fmt.Errorf("scan incomplete: %w", err)
+	}
+
+	return matches, nil
 }
 
 // isBinaryFile checks if a file is likely binary based on extension
