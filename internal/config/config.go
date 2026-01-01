@@ -10,8 +10,9 @@ import (
 // Config holds all application configuration
 type Config struct {
 	// API Keys
-	OpenAIKey   string `json:"openai_api_key,omitempty"`
-	AnthropicKey string `json:"anthropic_api_key,omitempty"`
+	OpenAIKey      string `json:"openai_api_key,omitempty"`
+	AnthropicKey   string `json:"anthropic_api_key,omitempty"`
+	OpenRouterKey  string `json:"openrouter_api_key,omitempty"`
 
 	// Defaults
 	DefaultProvider string `json:"default_provider,omitempty"`
@@ -99,6 +100,8 @@ func Set(key, value string) error {
 		cfg.OpenAIKey = value
 	case "anthropic_api_key", "anthropic":
 		cfg.AnthropicKey = value
+	case "openrouter_api_key", "openrouter":
+		cfg.OpenRouterKey = value
 	case "default_provider", "provider":
 		cfg.DefaultProvider = value
 	case "default_model", "model":
@@ -128,6 +131,15 @@ func GetAnthropicKey() string {
 	return os.Getenv("ANTHROPIC_API_KEY")
 }
 
+// GetOpenRouterKey returns the OpenRouter API key (config or env)
+func GetOpenRouterKey() string {
+	cfg := Get()
+	if cfg.OpenRouterKey != "" {
+		return cfg.OpenRouterKey
+	}
+	return os.Getenv("OPENROUTER_API_KEY")
+}
+
 // ConfigPath returns the path to the config file
 func ConfigPath() string {
 	return configFile
@@ -148,6 +160,12 @@ func ListKeys() map[string]string {
 		result["anthropic_api_key"] = maskKey(cfg.AnthropicKey)
 	} else if os.Getenv("ANTHROPIC_API_KEY") != "" {
 		result["anthropic_api_key"] = maskKey(os.Getenv("ANTHROPIC_API_KEY")) + " (env)"
+	}
+
+	if cfg.OpenRouterKey != "" {
+		result["openrouter_api_key"] = maskKey(cfg.OpenRouterKey)
+	} else if os.Getenv("OPENROUTER_API_KEY") != "" {
+		result["openrouter_api_key"] = maskKey(os.Getenv("OPENROUTER_API_KEY")) + " (env)"
 	}
 
 	if cfg.DefaultProvider != "" {
@@ -181,6 +199,8 @@ func Delete(key string) error {
 		cfg.OpenAIKey = ""
 	case "anthropic_api_key", "anthropic":
 		cfg.AnthropicKey = ""
+	case "openrouter_api_key", "openrouter":
+		cfg.OpenRouterKey = ""
 	case "default_provider", "provider":
 		cfg.DefaultProvider = ""
 	case "default_model", "model":
