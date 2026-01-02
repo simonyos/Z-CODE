@@ -8,9 +8,12 @@ A beautiful terminal-based AI coding assistant with multi-provider support.
 ## Features
 
 - **Interactive TUI** - Beautiful terminal interface built with [Bubble Tea](https://github.com/charmbracelet/bubbletea)
-- **Multi-Provider Support** - Use Claude CLI, Gemini CLI, or OpenAI API
+- **Multi-Provider Support** - Use Claude CLI, Gemini CLI, OpenAI API, or OpenRouter
 - **Streaming Responses** - See AI responses as they're generated
 - **Built-in Tools** - File operations, directory listing, and shell commands
+- **Custom Agents** - Define specialized AI agents with markdown files
+- **Workflows** - Chain agents together with YAML workflow definitions
+- **Handoff Mode** - Agents can transfer control to other agents with context
 - **Slash Commands** - Quick actions with `/help`, `/config`, `/clear`, and more
 - **Configuration Management** - Store API keys and defaults securely
 
@@ -130,8 +133,180 @@ Type these commands in the chat:
 | `/clear` | Clear chat history |
 | `/reset` | Reset conversation and context |
 | `/tools` | List available tools |
+| `/agents` | List custom agents |
+| `/skills` | List skills |
+| `/workflows` | List available workflows |
 | `/config` | Show or set configuration |
 | `/quit` | Exit Z-Code |
+
+## Custom Agents
+
+Create specialized AI agents by adding markdown files with YAML frontmatter.
+
+### Creating an Agent
+
+Create a file in `.zcode/agents/` (project-local) or `~/.config/zcode/agents/` (global):
+
+```markdown
+---
+name: code-reviewer
+description: Reviews code for best practices
+tools:
+  - read_file
+  - grep
+  - glob
+max_iterations: 5
+handoff_to: code-fixer
+---
+
+You are an expert code reviewer. Your task is to analyze code for:
+1. Code Quality
+2. Best Practices
+3. Potential Bugs
+...
+```
+
+### Using Custom Agents
+
+```bash
+# Invoke by name
+/code-reviewer "Review the auth module"
+
+# List available agents
+/agents
+```
+
+### Agent Configuration
+
+| Field | Description |
+|-------|-------------|
+| `name` | Unique identifier (used as slash command) |
+| `description` | Brief description shown in `/agents` |
+| `tools` | List of allowed tools (empty = all tools) |
+| `max_iterations` | Max LLM calls per conversation (default: 10) |
+| `handoff_to` | Default agent for handoffs |
+
+## Skills
+
+Skills are lightweight reusable prompt templates - simpler than agents.
+
+### Creating a Skill
+
+Create a file in `.zcode/skills/` (project-local) or `~/.config/zcode/skills/` (global):
+
+```markdown
+---
+name: explain-code
+description: Explains code in simple terms
+tags:
+  - learning
+  - documentation
+variables:
+  - language
+---
+
+You are a helpful programming instructor. Explain the following code in simple terms.
+
+Language preference: {language}
+
+Code to explain:
+{user_input}
+```
+
+### Using Skills
+
+```bash
+# Invoke a skill
+/skill:explain-code "func main() { fmt.Println(\"Hello\") }"
+
+# With variables
+/skill:write-tests framework=jest "function add(a, b) { return a + b }"
+
+# List available skills
+/skills
+```
+
+### Skill Configuration
+
+| Field | Description |
+|-------|-------------|
+| `name` | Unique identifier (used with `/skill:` prefix) |
+| `description` | Brief description shown in `/skills` |
+| `tags` | Categories for organization |
+| `variables` | Named placeholders (`{var_name}` in prompt) |
+
+### Built-in Example Skills
+
+- `explain-code` - Explains code in simple terms
+- `write-tests` - Generates unit tests
+- `refactor` - Suggests refactoring improvements
+- `debug` - Helps debug code issues
+- `document` - Generates documentation
+
+## Workflows
+
+Chain multiple agents together with YAML workflow definitions.
+
+### Creating a Workflow
+
+Create a file in `.zcode/workflows/` (project-local) or `~/.config/zcode/workflows/` (global):
+
+```yaml
+name: review-and-fix
+description: Reviews code and fixes issues
+
+steps:
+  - name: review
+    agent: code-reviewer
+    output: review_results
+    prompt: "Review: {user_input}"
+
+  - name: fix
+    agent: code-fixer
+    input: review_results
+    condition: "review_results.success"
+    prompt: "Fix issues: {review_results.output}"
+
+  - name: test
+    agent: test-runner
+    loop_until: "test_results.success == true"
+    max_loops: 3
+```
+
+### Using Workflows
+
+```bash
+# Run a workflow
+/run:review-and-fix "Fix issues in src/api"
+
+# List available workflows
+/workflows
+```
+
+### Workflow Step Options
+
+| Field | Description |
+|-------|-------------|
+| `name` | Step identifier |
+| `agent` | Agent to execute |
+| `input` | Context key to read from |
+| `output` | Context key to write to |
+| `prompt` | Custom prompt (supports `{variables}`) |
+| `condition` | Expression that must be true to run |
+| `loop_until` | Expression to stop looping |
+| `max_loops` | Maximum loop iterations |
+| `on_success` | Step to jump to on success |
+| `on_failure` | Step to jump to on failure |
+
+## Handoff Mode
+
+Agents can transfer control to other agents using XML handoff tags:
+
+```xml
+<handoff agent="code-fixer" reason="Found issues to fix">
+  <context key="issues">List of issues here</context>
+</handoff>
+```
 
 ### Keyboard Shortcuts
 
@@ -155,22 +330,47 @@ z-code/
 │   └── config.go         # Config subcommand
 ├── internal/
 │   ├── agent/            # AI agent orchestration
+│   ├── agents/           # Custom agent system
+│   │   ├── definition.go # Agent definition types
+│   │   ├── loader.go     # Markdown parser
+│   │   ├── registry.go   # Agent discovery
+│   │   ├── executor.go   # Agent execution
+│   │   └── handoff.go    # Handoff parsing
+│   ├── skills/           # Skills system
+│   │   ├── definition.go # Skill definition types
+│   │   ├── loader.go     # Markdown parser
+│   │   ├── registry.go   # Skill discovery
+│   │   └── executor.go   # Skill execution
+│   ├── workflows/        # Workflow engine
+│   │   ├── definition.go # Workflow/step types
+│   │   ├── loader.go     # YAML parser
+│   │   ├── engine.go     # Workflow execution
+│   │   ├── context.go    # Shared state
+│   │   └── handoff.go    # Handoff management
 │   ├── config/           # Configuration management
 │   ├── llm/              # LLM providers
 │   │   ├── provider.go   # Provider interface
 │   │   ├── claude_cli.go # Claude CLI implementation
 │   │   ├── gemini_cli.go # Gemini CLI implementation
-│   │   └── openai.go     # OpenAI API implementation
+│   │   ├── openai.go     # OpenAI API implementation
+│   │   └── openrouter.go # OpenRouter implementation
 │   ├── tools/            # Built-in tools
 │   │   ├── read_file.go
 │   │   ├── write_file.go
+│   │   ├── edit.go
 │   │   ├── list_dir.go
+│   │   ├── glob.go
+│   │   ├── grep.go
 │   │   └── bash.go
 │   └── tui/              # Terminal UI
 │       ├── app.go        # Main Bubble Tea model
 │       ├── components/   # UI components
 │       ├── layout/       # Layout management
 │       └── theme/        # Color themes
+├── .zcode/               # Project-local agents/skills/workflows
+│   ├── agents/
+│   ├── skills/
+│   └── workflows/
 ├── main.go
 ├── go.mod
 └── README.md

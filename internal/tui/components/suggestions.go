@@ -11,32 +11,53 @@ import (
 type Command struct {
 	Name        string
 	Description string
+	IsCustom    bool   // True for custom agent/workflow commands
+	AgentName   string // For custom agent commands
 }
 
-// AvailableCommands lists all slash commands
-var AvailableCommands = []Command{
+// BuiltinCommands lists all built-in slash commands
+var BuiltinCommands = []Command{
 	{Name: "/help", Description: "Show keyboard shortcuts and commands"},
 	{Name: "/clear", Description: "Clear chat history"},
 	{Name: "/reset", Description: "Reset conversation and context"},
 	{Name: "/tools", Description: "List available tools"},
 	{Name: "/config", Description: "Show or set configuration"},
+	{Name: "/agents", Description: "List custom agents"},
+	{Name: "/skills", Description: "List skills"},
+	{Name: "/workflows", Description: "List workflows"},
 	{Name: "/quit", Description: "Exit Z-Code"},
+}
+
+// AvailableCommands is kept for backward compatibility
+var AvailableCommands = BuiltinCommands
+
+// CommandProvider provides dynamic commands
+type CommandProvider interface {
+	GetAgentCommands() []Command
+	GetSkillCommands() []Command
+	GetWorkflowCommands() []Command
 }
 
 // Suggestions shows command autocomplete suggestions
 type Suggestions struct {
-	visible  bool
-	commands []Command
-	selected int
-	width    int
+	visible         bool
+	commands        []Command
+	selected        int
+	width           int
+	commandProvider CommandProvider
 }
 
 // NewSuggestions creates a new suggestions component
 func NewSuggestions() *Suggestions {
 	return &Suggestions{
-		commands: AvailableCommands,
+		commands: BuiltinCommands,
 		selected: 0,
 	}
+}
+
+// SetCommandProvider sets the provider for dynamic commands
+func (s *Suggestions) SetCommandProvider(provider CommandProvider) {
+	s.commandProvider = provider
 }
 
 // SetWidth sets the component width
@@ -54,9 +75,34 @@ func (s *Suggestions) Filter(input string) {
 	s.visible = true
 	s.commands = []Command{}
 
-	for _, cmd := range AvailableCommands {
+	// Add built-in commands
+	for _, cmd := range BuiltinCommands {
 		if strings.HasPrefix(cmd.Name, input) {
 			s.commands = append(s.commands, cmd)
+		}
+	}
+
+	// Add dynamic commands from provider
+	if s.commandProvider != nil {
+		// Add custom agent commands
+		for _, cmd := range s.commandProvider.GetAgentCommands() {
+			if strings.HasPrefix(cmd.Name, input) {
+				s.commands = append(s.commands, cmd)
+			}
+		}
+
+		// Add skill commands
+		for _, cmd := range s.commandProvider.GetSkillCommands() {
+			if strings.HasPrefix(cmd.Name, input) {
+				s.commands = append(s.commands, cmd)
+			}
+		}
+
+		// Add workflow commands
+		for _, cmd := range s.commandProvider.GetWorkflowCommands() {
+			if strings.HasPrefix(cmd.Name, input) {
+				s.commands = append(s.commands, cmd)
+			}
 		}
 	}
 

@@ -19,10 +19,18 @@ type ToolExecution struct {
 	Error  string
 }
 
+// HandoffInstruction represents a request to transfer control to another agent
+type HandoffInstruction struct {
+	TargetAgent string
+	Reason      string
+	Context     map[string]any
+}
+
 // ChatResult contains the response and any tool executions
 type ChatResult struct {
 	Response  string
 	ToolCalls []ToolExecution
+	Handoff   *HandoffInstruction // Non-nil if handoff was requested
 }
 
 // StreamEvent represents events during streaming chat
@@ -47,6 +55,9 @@ type StreamEvent struct {
 
 	// For error event
 	Error error
+
+	// For handoff event
+	Handoff *HandoffInstruction
 }
 
 // EventHandler receives callbacks during agent execution.
@@ -60,10 +71,20 @@ type EventHandler interface {
 
 // Agent orchestrates the LLM and tools
 type Agent struct {
-	provider llm.Provider
-	registry *tools.Registry
-	messages []llm.Message
-	handler  EventHandler
+	provider      llm.Provider
+	registry      *tools.Registry
+	messages      []llm.Message
+	handler       EventHandler
+	maxIterations int
+}
+
+// AgentConfig holds configuration for creating a custom agent
+type AgentConfig struct {
+	Provider      llm.Provider
+	ConfirmFn     tools.ConfirmFunc
+	SystemPrompt  string   // Custom system prompt (empty = default)
+	MaxIterations int      // Max LLM calls per conversation (0 = default 10)
+	AllowedTools  []string // Tool names to enable (empty = all tools)
 }
 
 // New creates a new agent with the given provider
@@ -80,12 +101,70 @@ func New(provider llm.Provider, confirmFn tools.ConfirmFunc) *Agent {
 	reg.Register(tools.NewGrepTool())
 
 	return &Agent{
-		provider: provider,
-		registry: reg,
+		provider:      provider,
+		registry:      reg,
+		maxIterations: 10,
 		messages: []llm.Message{
 			{Role: "system", Content: reg.BuildSystemPrompt()},
 		},
 	}
+}
+
+// NewWithConfig creates a new agent with custom configuration
+func NewWithConfig(cfg AgentConfig) *Agent {
+	reg := tools.NewRegistry()
+
+	// Build map of all available tools
+	allTools := map[string]tools.Tool{
+		"read_file":  tools.NewReadFileTool(),
+		"list_dir":   tools.NewListDirTool(),
+		"write_file": tools.NewWriteFileTool(cfg.ConfirmFn),
+		"edit_file":  tools.NewEditTool(cfg.ConfirmFn),
+		"run_command": tools.NewBashTool(cfg.ConfirmFn),
+		"glob":       tools.NewGlobTool(),
+		"grep":       tools.NewGrepTool(),
+	}
+
+	// Register tools based on config
+	if len(cfg.AllowedTools) == 0 {
+		// Register all tools
+		for _, tool := range allTools {
+			reg.Register(tool)
+		}
+	} else {
+		// Register only allowed tools
+		for _, name := range cfg.AllowedTools {
+			if tool, ok := allTools[name]; ok {
+				reg.Register(tool)
+			}
+		}
+	}
+
+	// Determine system prompt
+	systemPrompt := cfg.SystemPrompt
+	if systemPrompt == "" {
+		systemPrompt = reg.BuildSystemPrompt()
+	}
+
+	// Determine max iterations
+	maxIter := cfg.MaxIterations
+	if maxIter <= 0 {
+		maxIter = 10
+	}
+
+	return &Agent{
+		provider:      cfg.Provider,
+		registry:      reg,
+		maxIterations: maxIter,
+		messages: []llm.Message{
+			{Role: "system", Content: systemPrompt},
+		},
+	}
+}
+
+// Provider returns the LLM provider
+func (a *Agent) Provider() llm.Provider {
+	return a.provider
 }
 
 // SetEventHandler sets the callback handler for agent events
@@ -108,8 +187,7 @@ func (a *Agent) Chat(ctx context.Context, userMessage string) (*ChatResult, erro
 		ToolCalls: []ToolExecution{},
 	}
 
-	maxIterations := 10
-	for i := 0; i < maxIterations; i++ {
+	for i := 0; i < a.maxIterations; i++ {
 		if a.handler != nil {
 			a.handler.OnThinking()
 		}
@@ -294,8 +372,7 @@ func (a *Agent) ChatStream(ctx context.Context, userMessage string) <-chan Strea
 
 		events <- StreamEvent{Type: "start"}
 
-		maxIterations := 10
-		for i := 0; i < maxIterations; i++ {
+		for i := 0; i < a.maxIterations; i++ {
 			// Use streaming generation
 			chunks, err := a.provider.GenerateStream(ctx, a.messages)
 			if err != nil {
