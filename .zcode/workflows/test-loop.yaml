@@ -1,0 +1,24 @@
+name: test-loop
+description: Run tests and fix failures until all tests pass
+
+steps:
+  - name: run-tests
+    agent: test-runner
+    output: test_results
+    prompt: "Run the tests for: {user_input}"
+
+  - name: fix-failures
+    agent: code-fixer
+    input: test_results
+    output: fix_results
+    condition: "test_results.success != true"
+    prompt: "Fix the failing tests based on this output:\n\n{test_results.output}"
+
+  - name: verify
+    agent: test-runner
+    input: fix_results
+    output: verify_results
+    condition: "fix_results.success"
+    loop_until: "verify_results.success == true"
+    max_loops: 3
+    prompt: "Run tests again to verify the fixes"

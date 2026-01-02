@@ -211,3 +211,54 @@ func Delete(key string) error {
 
 	return Save(cfg)
 }
+
+// GetAgentPaths returns paths to search for custom agent definitions
+// Returns both project-local (.zcode/agents/) and global (~/.config/zcode/agents/) paths
+func GetAgentPaths() []string {
+	paths := []string{}
+
+	// Project-local path
+	cwd, err := os.Getwd()
+	if err == nil {
+		paths = append(paths, filepath.Join(cwd, ".zcode", "agents"))
+	}
+
+	// Global config path
+	paths = append(paths, filepath.Join(configDir, "agents"))
+
+	return paths
+}
+
+// GetWorkflowPaths returns paths to search for workflow definitions
+// Returns both project-local (.zcode/workflows/) and global (~/.config/zcode/workflows/) paths
+func GetWorkflowPaths() []string {
+	paths := []string{}
+
+	// Project-local path
+	cwd, err := os.Getwd()
+	if err == nil {
+		paths = append(paths, filepath.Join(cwd, ".zcode", "workflows"))
+	}
+
+	// Global config path
+	paths = append(paths, filepath.Join(configDir, "workflows"))
+
+	return paths
+}
+
+// GetSkillPaths returns paths to search for skill definitions
+// Returns both project-local (.zcode/skills/) and global (~/.config/zcode/skills/) paths
+func GetSkillPaths() []string {
+	paths := []string{}
+
+	// Project-local path
+	cwd, err := os.Getwd()
+	if err == nil {
+		paths = append(paths, filepath.Join(cwd, ".zcode", "skills"))
+	}
+
+	// Global config path
+	paths = append(paths, filepath.Join(configDir, "skills"))
+
+	return paths
+}

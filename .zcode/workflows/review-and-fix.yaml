@@ -1,0 +1,22 @@
+name: review-and-fix
+description: Reviews code and automatically fixes identified issues
+
+steps:
+  - name: review
+    agent: code-reviewer
+    output: review_results
+    prompt: "Review the following code or file: {user_input}"
+
+  - name: fix
+    agent: code-fixer
+    input: review_results
+    output: fix_results
+    condition: "review_results.success"
+    prompt: "Fix the following issues identified in the code review:\n\n{review_results.output}"
+
+  - name: test
+    agent: test-runner
+    input: fix_results
+    output: test_results
+    condition: "fix_results.success"
+    prompt: "Run tests to verify the fixes work correctly"
