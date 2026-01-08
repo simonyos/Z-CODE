@@ -13,6 +13,8 @@ type Config struct {
 	OpenAIKey      string `json:"openai_api_key,omitempty"`
 	AnthropicKey   string `json:"anthropic_api_key,omitempty"`
 	OpenRouterKey  string `json:"openrouter_api_key,omitempty"`
+	LiteLLMKey     string `json:"litellm_api_key,omitempty"`
+	LiteLLMBaseURL string `json:"litellm_base_url,omitempty"`
 
 	// Defaults
 	DefaultProvider string `json:"default_provider,omitempty"`
@@ -102,6 +104,10 @@ func Set(key, value string) error {
 		cfg.AnthropicKey = value
 	case "openrouter_api_key", "openrouter":
 		cfg.OpenRouterKey = value
+	case "litellm_api_key", "litellm":
+		cfg.LiteLLMKey = value
+	case "litellm_base_url", "litellm_url":
+		cfg.LiteLLMBaseURL = value
 	case "default_provider", "provider":
 		cfg.DefaultProvider = value
 	case "default_model", "model":
@@ -140,6 +146,27 @@ func GetOpenRouterKey() string {
 	return os.Getenv("OPENROUTER_API_KEY")
 }
 
+// GetLiteLLMKey returns the LiteLLM API key (config or env)
+func GetLiteLLMKey() string {
+	cfg := Get()
+	if cfg.LiteLLMKey != "" {
+		return cfg.LiteLLMKey
+	}
+	return os.Getenv("LITELLM_API_KEY")
+}
+
+// GetLiteLLMBaseURL returns the LiteLLM base URL (config or env or default)
+func GetLiteLLMBaseURL() string {
+	cfg := Get()
+	if cfg.LiteLLMBaseURL != "" {
+		return cfg.LiteLLMBaseURL
+	}
+	if url := os.Getenv("LITELLM_BASE_URL"); url != "" {
+		return url
+	}
+	return "http://localhost:4000" // Default LiteLLM proxy URL
+}
+
 // ConfigPath returns the path to the config file
 func ConfigPath() string {
 	return configFile
@@ -166,6 +193,18 @@ func ListKeys() map[string]string {
 		result["openrouter_api_key"] = maskKey(cfg.OpenRouterKey)
 	} else if os.Getenv("OPENROUTER_API_KEY") != "" {
 		result["openrouter_api_key"] = maskKey(os.Getenv("OPENROUTER_API_KEY")) + " (env)"
+	}
+
+	if cfg.LiteLLMKey != "" {
+		result["litellm_api_key"] = maskKey(cfg.LiteLLMKey)
+	} else if os.Getenv("LITELLM_API_KEY") != "" {
+		result["litellm_api_key"] = maskKey(os.Getenv("LITELLM_API_KEY")) + " (env)"
+	}
+
+	if cfg.LiteLLMBaseURL != "" {
+		result["litellm_base_url"] = cfg.LiteLLMBaseURL
+	} else if os.Getenv("LITELLM_BASE_URL") != "" {
+		result["litellm_base_url"] = os.Getenv("LITELLM_BASE_URL") + " (env)"
 	}
 
 	if cfg.DefaultProvider != "" {
@@ -201,6 +240,10 @@ func Delete(key string) error {
 		cfg.AnthropicKey = ""
 	case "openrouter_api_key", "openrouter":
 		cfg.OpenRouterKey = ""
+	case "litellm_api_key", "litellm":
+		cfg.LiteLLMKey = ""
+	case "litellm_base_url", "litellm_url":
+		cfg.LiteLLMBaseURL = ""
 	case "default_provider", "provider":
 		cfg.DefaultProvider = ""
 	case "default_model", "model":
