@@ -30,7 +30,8 @@ Supported providers:
   claude     - Claude Code CLI (default)
   gemini     - Gemini CLI
   openai     - OpenAI API (requires OPENAI_API_KEY)
-  openrouter - OpenRouter API (requires OPENROUTER_API_KEY)`,
+  openrouter - OpenRouter API (requires OPENROUTER_API_KEY)
+  litellm    - LiteLLM Proxy (unified interface to 100+ LLMs)`,
 	Run: runChat,
 }
 
@@ -77,9 +78,16 @@ func runChat(cmd *cobra.Command, args []string) {
 	case "claude":
 		provider = llm.NewClaudeCLI()
 		modelName = "claude"
+	case "litellm":
+		model := selectedModel
+		if model == "" {
+			model = "gpt-4o" // Default LiteLLM model
+		}
+		provider = llm.NewLiteLLM(model)
+		modelName = model
 	default:
 		fmt.Printf("Unknown provider: %s\n", selectedProvider)
-		fmt.Println("Supported providers: claude, gemini, openai, openrouter")
+		fmt.Println("Supported providers: claude, gemini, openai, openrouter, litellm")
 		os.Exit(1)
 	}
 
@@ -106,6 +114,6 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.Flags().StringVarP(&providerFlag, "provider", "p", "", "LLM provider (claude, gemini, openai, openrouter)")
+	rootCmd.Flags().StringVarP(&providerFlag, "provider", "p", "", "LLM provider (claude, gemini, openai, openrouter, litellm)")
 	rootCmd.Flags().StringVarP(&modelFlag, "model", "m", "", "Model to use (provider-specific)")
 }

@@ -29,10 +29,13 @@ var configSetCmd = &cobra.Command{
 	Long: `Set a configuration value.
 
 Available keys:
-  openai      - OpenAI API key
-  anthropic   - Anthropic API key
-  provider    - Default provider (claude, openai)
-  model       - Default model`,
+  openai       - OpenAI API key
+  anthropic    - Anthropic API key
+  openrouter   - OpenRouter API key
+  litellm      - LiteLLM API key
+  litellm_url  - LiteLLM base URL (default: http://localhost:4000)
+  provider     - Default provider (claude, openai, openrouter, litellm)
+  model        - Default model`,
 	Args: cobra.ExactArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		key := args[0]
