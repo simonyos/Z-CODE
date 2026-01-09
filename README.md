@@ -8,7 +8,9 @@ A beautiful terminal-based AI coding assistant with multi-provider support.
 ## Features
 
 - **Interactive TUI** - Beautiful terminal interface built with [Bubble Tea](https://github.com/charmbracelet/bubbletea)
-- **Multi-Provider Support** - Use Claude CLI, Gemini CLI, OpenAI API, or OpenRouter
+- **Multi-Provider Support** - Use OpenAI API, OpenRouter, or LiteLLM (100+ models)
+- **Native Tool Calling** - Reliable structured tool calls via OpenAI-compatible API
+- **Self-Healing Loop** - Automatic retry when tool calls fail
 - **Streaming Responses** - See AI responses as they're generated
 - **Built-in Tools** - File operations, directory listing, and shell commands
 - **Custom Agents** - Define specialized AI agents with markdown files
@@ -51,9 +53,9 @@ A beautiful terminal-based AI coding assistant with multi-provider support.
 
 - Go 1.24 or later
 - One of the following AI backends:
-  - [Claude Code CLI](https://claude.ai/cli) (default)
-  - [Gemini CLI](https://github.com/google-gemini/gemini-cli)
   - OpenAI API key
+  - OpenRouter API key
+  - LiteLLM proxy (unified interface to 100+ models)
 
 ### Build from Source
 
@@ -80,24 +82,45 @@ go install github.com/simonyos/Z-CODE@latest
 ### Basic Usage
 
 ```bash
-# Start with default provider (Claude CLI)
+# Start with default provider (LiteLLM)
 zcode
 
 # Use a specific provider
-zcode -p gemini
 zcode -p openai
+zcode -p openrouter
+zcode -p litellm
 
 # Specify a model
 zcode -p openai -m gpt-4-turbo
+zcode -p litellm -m anthropic/claude-3.5-sonnet
+zcode -p openrouter -m google/gemini-flash-1.5
 ```
 
 ### Providers
 
 | Provider | Flag | Requirements |
 |----------|------|--------------|
-| Claude | `-p claude` | [Claude Code CLI](https://claude.ai/cli) installed |
-| Gemini | `-p gemini` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) installed |
+| LiteLLM | `-p litellm` | LiteLLM proxy running (default) |
 | OpenAI | `-p openai` | `OPENAI_API_KEY` or configured via `zcode config` |
+| OpenRouter | `-p openrouter` | `OPENROUTER_API_KEY` or configured via `zcode config` |
+
+### Using Claude and Gemini Models
+
+With v2.0, Claude and Gemini models are accessed through API providers:
+
+```bash
+# Claude via LiteLLM
+zcode -p litellm -m anthropic/claude-3.5-sonnet
+
+# Claude via OpenRouter
+zcode -p openrouter -m anthropic/claude-3.5-sonnet
+
+# Gemini via LiteLLM
+zcode -p litellm -m google/gemini-flash-1.5
+
+# Gemini via OpenRouter
+zcode -p openrouter -m google/gemini-1.5-flash
+```
 
 ### Configuration
 
@@ -445,11 +468,10 @@ z-code/
 │   ├── config/           # Configuration management
 │   ├── llm/              # LLM providers
 │   │   ├── provider.go   # Provider interface
-│   │   ├── claude_cli.go # Claude CLI implementation
-│   │   ├── gemini_cli.go # Gemini CLI implementation
+│   │   ├── types.go      # OpenAI-compatible types
 │   │   ├── openai.go     # OpenAI API implementation
-│   │   ├── litellm.go    # LiteLLM proxy implementation
-│   │   └── openrouter.go # OpenRouter implementation
+│   │   ├── openrouter.go # OpenRouter implementation
+│   │   └── litellm.go    # LiteLLM implementation (with native tool calling)
 │   ├── tools/            # Built-in tools
 │   │   ├── read_file.go
 │   │   ├── write_file.go
@@ -491,8 +513,18 @@ type Provider interface {
 }
 ```
 
-2. Add the provider to the switch statement in `cmd/root.go`
-3. Update the help text and documentation
+2. For native tool calling support, also implement `ToolProvider`:
+
+```go
+type ToolProvider interface {
+    Provider
+    GenerateWithTools(ctx context.Context, messages []Message, tools []OpenAITool) (*ToolCallResponse, error)
+    GenerateStreamWithTools(ctx context.Context, messages []Message, tools []OpenAITool) (<-chan ToolStreamChunk, error)
+}
+```
+
+3. Add the provider to the switch statement in `cmd/root.go`
+4. Update the help text and documentation
 
 ## Built With
 
@@ -531,13 +563,14 @@ go test ./...
 
 ### Ideas for Contributions
 
-- [ ] Add more LLM providers (Anthropic API, Ollama, etc.)
+- [ ] Add more LLM providers (Ollama, etc.)
 - [ ] Session persistence (save/resume conversations)
 - [ ] Custom themes
 - [ ] Plugin system for tools
 - [ ] Vim keybindings
 - [ ] Multi-file context
 - [ ] Code syntax highlighting in responses
+- [ ] Dual-brain mode (fast/smart model switching)
 
 ## License
 

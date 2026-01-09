@@ -219,11 +219,21 @@ func startSwarmTUI(client *swarm.Client, role swarm.Role) {
 		provider = llm.NewOpenRouter(model)
 		modelName = model
 	case "gemini":
-		provider = llm.NewGeminiCLI()
-		modelName = "gemini"
+		// Gemini is now accessed through LiteLLM or OpenRouter
+		model := selectedModel
+		if model == "" {
+			model = "google/gemini-flash-1.5"
+		}
+		provider = llm.NewLiteLLM(model)
+		modelName = model
 	case "claude":
-		provider = llm.NewClaudeCLI()
-		modelName = "claude"
+		// Claude is now accessed through LiteLLM or OpenRouter
+		model := selectedModel
+		if model == "" {
+			model = "anthropic/claude-3.5-sonnet"
+		}
+		provider = llm.NewLiteLLM(model)
+		modelName = model
 	case "litellm":
 		model := selectedModel
 		if model == "" {

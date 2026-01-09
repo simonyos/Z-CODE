@@ -120,62 +120,6 @@ func TestMockProvider(t *testing.T) {
 	})
 }
 
-func TestClaudeCLI_buildPrompt(t *testing.T) {
-	cli := NewClaudeCLI()
-
-	messages := []Message{
-		{Role: "system", Content: "You are helpful."},
-		{Role: "user", Content: "Hello"},
-		{Role: "assistant", Content: "Hi there!"},
-		{Role: "user", Content: "How are you?"},
-	}
-
-	prompt, systemPrompt := cli.buildPrompt(messages)
-
-	// Check that prompt is not empty
-	if prompt == "" {
-		t.Error("buildPrompt() returned empty prompt")
-	}
-
-	// System message should be extracted separately
-	if systemPrompt != "You are helpful." {
-		t.Errorf("buildPrompt() systemPrompt = %q, want %q", systemPrompt, "You are helpful.")
-	}
-
-	// The prompt should contain user and assistant message contents
-	for _, msg := range messages {
-		if msg.Role == "system" {
-			continue // System is extracted separately
-		}
-		if msg.Content != "" && !contains(prompt, msg.Content) {
-			t.Errorf("buildPrompt() should contain %q", msg.Content)
-		}
-	}
-}
-
-func TestGeminiCLI_buildPrompt(t *testing.T) {
-	cli := NewGeminiCLI()
-
-	messages := []Message{
-		{Role: "system", Content: "You are helpful."},
-		{Role: "user", Content: "Hello"},
-		{Role: "assistant", Content: "Hi there!"},
-	}
-
-	prompt := cli.buildPrompt(messages)
-
-	if prompt == "" {
-		t.Error("buildPrompt() returned empty string")
-	}
-
-	// Check structure
-	for _, msg := range messages {
-		if msg.Content != "" && !contains(prompt, msg.Content) {
-			t.Errorf("buildPrompt() should contain %q", msg.Content)
-		}
-	}
-}
-
 func TestOpenAI_convertMessages(t *testing.T) {
 	openai := NewOpenAI("gpt-4o")
 	openai.APIKey = "test-key" // Set a test key
@@ -212,26 +156,6 @@ func TestOpenAI_ModelName(t *testing.T) {
 				t.Errorf("ModelName() = %q, want %q", openai.ModelName(), model)
 			}
 		})
-	}
-}
-
-func TestNewClaudeCLI(t *testing.T) {
-	cli := NewClaudeCLI()
-	if cli == nil {
-		t.Fatal("NewClaudeCLI() returned nil")
-	}
-	if cli.Timeout <= 0 {
-		t.Error("NewClaudeCLI().Timeout should be positive")
-	}
-}
-
-func TestNewGeminiCLI(t *testing.T) {
-	cli := NewGeminiCLI()
-	if cli == nil {
-		t.Fatal("NewGeminiCLI() returned nil")
-	}
-	if cli.Timeout <= 0 {
-		t.Error("NewGeminiCLI().Timeout should be positive")
 	}
 }
 

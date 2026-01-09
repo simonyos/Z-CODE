@@ -4,8 +4,11 @@ import "context"
 
 // Message represents a chat message
 type Message struct {
-	Role    string `json:"role"` // "user", "assistant", "system"
-	Content string `json:"content"`
+	Role       string           `json:"role"`                   // "user", "assistant", "system", "tool"
+	Content    string           `json:"content"`
+	Name       string           `json:"name,omitempty"`         // Tool name for tool result messages
+	ToolCalls  []OpenAIToolCall `json:"tool_calls,omitempty"`   // For assistant messages with tool calls
+	ToolCallID string           `json:"tool_call_id,omitempty"` // For tool result messages
 }
 
 // StreamChunk represents a piece of streaming output

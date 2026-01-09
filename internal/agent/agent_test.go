@@ -8,31 +8,60 @@ import (
 	"github.com/simonyos/Z-CODE/internal/tools"
 )
 
-// MockProvider is a test implementation of the LLM Provider interface
-type MockProvider struct {
-	responses []string
+// MockToolProvider is a test implementation of the ToolProvider interface
+type MockToolProvider struct {
+	responses []*llm.ToolCallResponse
 	callCount int
 }
 
-func NewMockProvider(responses ...string) *MockProvider {
-	return &MockProvider{responses: responses}
+func NewMockToolProvider(responses ...*llm.ToolCallResponse) *MockToolProvider {
+	return &MockToolProvider{responses: responses}
 }
 
-func (m *MockProvider) Generate(ctx context.Context, messages []llm.Message) (string, error) {
+// Simple helper to create a response with just text (no tool calls)
+func TextResponse(text string) *llm.ToolCallResponse {
+	return &llm.ToolCallResponse{Content: text, Done: true}
+}
+
+// Simple helper to create a response with tool calls
+func ToolCallResponse(content string, toolCalls ...llm.OpenAIToolCall) *llm.ToolCallResponse {
+	return &llm.ToolCallResponse{
+		Content:   content,
+		ToolCalls: toolCalls,
+		Done:      len(toolCalls) == 0,
+	}
+}
+
+func (m *MockToolProvider) Generate(ctx context.Context, messages []llm.Message) (string, error) {
+	resp, _ := m.GenerateWithTools(ctx, messages, nil)
+	return resp.Content, nil
+}
+
+func (m *MockToolProvider) GenerateStream(ctx context.Context, messages []llm.Message) (<-chan llm.StreamChunk, error) {
+	ch := make(chan llm.StreamChunk, 1)
+	go func() {
+		defer close(ch)
+		response, _ := m.Generate(ctx, messages)
+		ch <- llm.StreamChunk{Text: response, Done: true}
+	}()
+	return ch, nil
+}
+
+func (m *MockToolProvider) GenerateWithTools(ctx context.Context, messages []llm.Message, tools []llm.OpenAITool) (*llm.ToolCallResponse, error) {
 	if m.callCount >= len(m.responses) {
-		return "final response", nil
+		return &llm.ToolCallResponse{Content: "final response", Done: true}, nil
 	}
 	response := m.responses[m.callCount]
 	m.callCount++
 	return response, nil
 }
 
-func (m *MockProvider) GenerateStream(ctx context.Context, messages []llm.Message) (<-chan llm.StreamChunk, error) {
-	ch := make(chan llm.StreamChunk, 1)
+func (m *MockToolProvider) GenerateStreamWithTools(ctx context.Context, messages []llm.Message, tools []llm.OpenAITool) (<-chan llm.ToolStreamChunk, error) {
+	ch := make(chan llm.ToolStreamChunk, 1)
 	go func() {
 		defer close(ch)
-		response, _ := m.Generate(ctx, messages)
-		ch <- llm.StreamChunk{Text: response, Done: true}
+		resp, _ := m.GenerateWithTools(ctx, messages, tools)
+		ch <- llm.ToolStreamChunk{Text: resp.Content, ToolCalls: resp.ToolCalls, Done: true}
 	}()
 	return ch, nil
 }
@@ -61,7 +90,7 @@ func alwaysConfirm(prompt string) bool {
 }
 
 func TestNewAgent(t *testing.T) {
-	provider := NewMockProvider()
+	provider := NewMockToolProvider()
 	agent := New(provider, alwaysConfirm)
 
 	if agent == nil {
@@ -82,7 +111,7 @@ func TestNewAgent(t *testing.T) {
 }
 
 func TestAgent_SetEventHandler(t *testing.T) {
-	provider := NewMockProvider()
+	provider := NewMockToolProvider()
 	agent := New(provider, alwaysConfirm)
 
 	handler := &MockEventHandler{}
@@ -94,7 +123,7 @@ func TestAgent_SetEventHandler(t *testing.T) {
 }
 
 func TestAgent_Chat_SimpleResponse(t *testing.T) {
-	provider := NewMockProvider("Hello! How can I help you?")
+	provider := NewMockToolProvider(TextResponse("Hello! How can I help you?"))
 	agent := New(provider, alwaysConfirm)
 
 	ctx := context.Background()
@@ -115,16 +144,20 @@ func TestAgent_Chat_SimpleResponse(t *testing.T) {
 }
 
 func TestAgent_Chat_WithToolCall(t *testing.T) {
-	// First response is a tool call in XML format, second is the final response
-	provider := NewMockProvider(
-		`<tool_call>
-  <id>call_1</id>
-  <name>list_dir</name>
-  <parameters>
-    <path>.</path>
-  </parameters>
-</tool_call>`,
-		"The directory contains several files.",
+	// First response is a tool call using native format, second is the final response
+	provider := NewMockToolProvider(
+		ToolCallResponse("", llm.OpenAIToolCall{
+			ID:   "call_1",
+			Type: "function",
+			Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{
+				Name:      "list_dir",
+				Arguments: `{"path":"."}`,
+			},
+		}),
+		TextResponse("The directory contains several files."),
 	)
 	agent := New(provider, alwaysConfirm)
 
@@ -152,15 +185,19 @@ func TestAgent_Chat_WithToolCall(t *testing.T) {
 }
 
 func TestAgent_Chat_WithEventHandler(t *testing.T) {
-	provider := NewMockProvider(
-		`<tool_call>
-  <id>call_1</id>
-  <name>list_dir</name>
-  <parameters>
-    <path>.</path>
-  </parameters>
-</tool_call>`,
-		"Done!",
+	provider := NewMockToolProvider(
+		ToolCallResponse("", llm.OpenAIToolCall{
+			ID:   "call_1",
+			Type: "function",
+			Function: struct {
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			}{
+				Name:      "list_dir",
+				Arguments: `{"path":"."}`,
+			},
+		}),
+		TextResponse("Done!"),
 	)
 	agent := New(provider, alwaysConfirm)
 
@@ -187,24 +224,32 @@ func TestAgent_Chat_WithEventHandler(t *testing.T) {
 
 func TestAgent_Chat_ParallelTools(t *testing.T) {
 	// Response with multiple tool calls that should execute in parallel
-	provider := NewMockProvider(
-		`<tool_calls>
-  <tool_call>
-    <id>call_1</id>
-    <name>list_dir</name>
-    <parameters>
-      <path>.</path>
-    </parameters>
-  </tool_call>
-  <tool_call>
-    <id>call_2</id>
-    <name>list_dir</name>
-    <parameters>
-      <path>..</path>
-    </parameters>
-  </tool_call>
-</tool_calls>`,
-		"Both directories were listed.",
+	provider := NewMockToolProvider(
+		ToolCallResponse("",
+			llm.OpenAIToolCall{
+				ID:   "call_1",
+				Type: "function",
+				Function: struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				}{
+					Name:      "list_dir",
+					Arguments: `{"path":"."}`,
+				},
+			},
+			llm.OpenAIToolCall{
+				ID:   "call_2",
+				Type: "function",
+				Function: struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				}{
+					Name:      "list_dir",
+					Arguments: `{"path":".."}`,
+				},
+			},
+		),
+		TextResponse("Both directories were listed."),
 	)
 	agent := New(provider, alwaysConfirm)
 
@@ -239,7 +284,10 @@ func TestAgent_Chat_ParallelTools(t *testing.T) {
 }
 
 func TestAgent_History(t *testing.T) {
-	provider := NewMockProvider("Response 1", "Response 2")
+	provider := NewMockToolProvider(
+		TextResponse("Response 1"),
+		TextResponse("Response 2"),
+	)
 	agent := New(provider, alwaysConfirm)
 
 	ctx := context.Background()
@@ -261,7 +309,7 @@ func TestAgent_History(t *testing.T) {
 }
 
 func TestAgent_Reset(t *testing.T) {
-	provider := NewMockProvider("Response")
+	provider := NewMockToolProvider(TextResponse("Response"))
 	agent := New(provider, alwaysConfirm)
 
 	ctx := context.Background()
@@ -284,7 +332,7 @@ func TestAgent_Reset(t *testing.T) {
 }
 
 func TestAgent_AddTool(t *testing.T) {
-	provider := NewMockProvider()
+	provider := NewMockToolProvider()
 	agent := New(provider, alwaysConfirm)
 
 	// Create a custom tool
@@ -310,7 +358,7 @@ func TestAgent_AddTool(t *testing.T) {
 }
 
 func TestAgent_ChatStream(t *testing.T) {
-	provider := NewMockProvider("Streamed response")
+	provider := NewMockToolProvider(TextResponse("Streamed response"))
 	agent := New(provider, alwaysConfirm)
 
 	ctx := context.Background()
@@ -429,25 +477,33 @@ func (t *CustomTool) Execute(ctx context.Context, args map[string]any) tools.Too
 
 func TestAgent_Chat_ParallelTools_OneFailure(t *testing.T) {
 	// Test that when one tool in a parallel batch fails, other results are still collected
-	// The list_dir tool with invalid path should fail, but glob should succeed
-	provider := NewMockProvider(
-		`<tool_calls>
-  <tool_call>
-    <id>call_1</id>
-    <name>list_dir</name>
-    <parameters>
-      <path>/nonexistent/path/that/does/not/exist</path>
-    </parameters>
-  </tool_call>
-  <tool_call>
-    <id>call_2</id>
-    <name>list_dir</name>
-    <parameters>
-      <path>.</path>
-    </parameters>
-  </tool_call>
-</tool_calls>`,
-		"One failed, one succeeded.",
+	// The list_dir tool with invalid path should fail, but the other should succeed
+	provider := NewMockToolProvider(
+		ToolCallResponse("",
+			llm.OpenAIToolCall{
+				ID:   "call_1",
+				Type: "function",
+				Function: struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				}{
+					Name:      "list_dir",
+					Arguments: `{"path":"/nonexistent/path/that/does/not/exist"}`,
+				},
+			},
+			llm.OpenAIToolCall{
+				ID:   "call_2",
+				Type: "function",
+				Function: struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				}{
+					Name:      "list_dir",
+					Arguments: `{"path":"."}`,
+				},
+			},
+		),
+		TextResponse("One failed, one succeeded."),
 	)
 	agent := New(provider, alwaysConfirm)
 
@@ -484,7 +540,7 @@ func TestAgent_Chat_ParallelTools_OneFailure(t *testing.T) {
 
 func TestAgent_Chat_ContextCancellation(t *testing.T) {
 	// Test that context cancellation is handled gracefully
-	provider := NewMockProvider("Response")
+	provider := NewMockToolProvider(TextResponse("Response"))
 	agent := New(provider, alwaysConfirm)
 
 	// Create a context that's already cancelled
