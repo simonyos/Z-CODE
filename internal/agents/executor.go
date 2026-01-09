@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -62,8 +63,14 @@ type ToolExecution struct {
 
 // Execute runs a custom agent with the given prompt
 func (e *Executor) Execute(ctx context.Context, def *AgentDefinition, userPrompt string) (*ExecuteResult, error) {
+	toolProvider, ok := e.provider.(llm.ToolProvider)
+	if !ok {
+		return nil, fmt.Errorf("provider does not support native tool calling")
+	}
+
 	registry := e.buildRegistry(def)
 	systemPrompt := e.buildSystemPrompt(def, registry)
+	openAITools := registry.GetOpenAIToolDefinitions()
 
 	messages := []llm.Message{
 		{Role: "system", Content: systemPrompt},
@@ -76,56 +83,49 @@ func (e *Executor) Execute(ctx context.Context, def *AgentDefinition, userPrompt
 
 	maxIterations := def.GetMaxIterations()
 	for i := 0; i < maxIterations; i++ {
-		response, err := e.provider.Generate(ctx, messages)
+		resp, err := toolProvider.GenerateWithTools(ctx, messages, openAITools)
 		if err != nil {
 			return nil, err
 		}
 
 		// Check for handoff instruction
-		if handoff := ParseHandoff(response); handoff != nil {
+		if handoff := ParseHandoff(resp.Content); handoff != nil {
 			result.Handoff = handoff
-			result.Response = response
+			result.Response = resp.Content
 			return result, nil
 		}
 
-		// Try to parse as tool calls
-		toolCalls, err := tools.ParseToolCalls(response)
-		if err == nil && len(toolCalls) > 0 {
+		// Check for tool calls
+		if len(resp.ToolCalls) > 0 {
 			// Execute tool calls
-			execResults := e.executeToolCalls(ctx, registry, toolCalls)
+			execResults := e.executeNativeToolCalls(ctx, registry, resp.ToolCalls)
 			result.ToolCalls = append(result.ToolCalls, execResults...)
 
-			// Build XML results for message history
-			var xmlResults []struct {
-				ID     string
-				Name   string
-				Result tools.ToolResult
-			}
+			// Add assistant message with tool calls
+			messages = append(messages, llm.Message{
+				Role:      "assistant",
+				Content:   resp.Content,
+				ToolCalls: resp.ToolCalls,
+			})
+
+			// Add tool result messages with name
 			for _, exec := range execResults {
-				xmlResults = append(xmlResults, struct {
-					ID     string
-					Name   string
-					Result tools.ToolResult
-				}{
-					ID:   exec.ID,
-					Name: exec.Name,
-					Result: tools.ToolResult{
-						Success: exec.Error == "",
-						Output:  exec.Result,
-						Error:   exec.Error,
-					},
+				resultContent := exec.Result
+				if exec.Error != "" {
+					resultContent = "Error: " + exec.Error
+				}
+				messages = append(messages, llm.Message{
+					Role:       "tool",
+					Content:    resultContent,
+					Name:       exec.Name,
+					ToolCallID: exec.ID,
 				})
 			}
-
-			messages = append(messages,
-				llm.Message{Role: "assistant", Content: response},
-				llm.Message{Role: "user", Content: tools.FormatToolResults(xmlResults)},
-			)
 			continue
 		}
 
-		// Not a tool call - final response
-		result.Response = response
+		// No tool calls - final response
+		result.Response = resp.Content
 		return result, nil
 	}
 
@@ -139,8 +139,15 @@ func (e *Executor) ExecuteStream(ctx context.Context, def *AgentDefinition, user
 	go func() {
 		defer close(events)
 
+		toolProvider, ok := e.provider.(llm.ToolProvider)
+		if !ok {
+			events <- StreamEvent{Type: "error", Error: fmt.Errorf("provider does not support native tool calling")}
+			return
+		}
+
 		registry := e.buildRegistry(def)
 		systemPrompt := e.buildSystemPrompt(def, registry)
+		openAITools := registry.GetOpenAIToolDefinitions()
 
 		messages := []llm.Message{
 			{Role: "system", Content: systemPrompt},
@@ -151,71 +158,69 @@ func (e *Executor) ExecuteStream(ctx context.Context, def *AgentDefinition, user
 
 		maxIterations := def.GetMaxIterations()
 		for i := 0; i < maxIterations; i++ {
-			chunks, err := e.provider.GenerateStream(ctx, messages)
+			chunks, err := toolProvider.GenerateStreamWithTools(ctx, messages, openAITools)
 			if err != nil {
 				events <- StreamEvent{Type: "error", Error: err}
 				return
 			}
 
-			var fullResponse string
+			var fullContent string
+			var toolCalls []llm.OpenAIToolCall
 			for chunk := range chunks {
 				if chunk.Error != nil {
 					events <- StreamEvent{Type: "error", Error: chunk.Error}
 					return
 				}
 				if chunk.Done {
-					fullResponse = chunk.Text
+					fullContent = chunk.Text
+					toolCalls = chunk.ToolCalls
 				} else {
 					events <- StreamEvent{Type: "chunk", Text: chunk.Text}
 				}
 			}
 
 			// Check for handoff
-			if handoff := ParseHandoff(fullResponse); handoff != nil {
+			if handoff := ParseHandoff(fullContent); handoff != nil {
 				events <- StreamEvent{Type: "handoff", Handoff: handoff}
-				events <- StreamEvent{Type: "done", FinalResponse: fullResponse}
+				events <- StreamEvent{Type: "done", FinalResponse: fullContent}
 				return
 			}
 
-			// Try to parse as tool calls
-			toolCalls, err := tools.ParseToolCalls(fullResponse)
-			if err == nil && len(toolCalls) > 0 {
+			// Check for tool calls
+			if len(toolCalls) > 0 {
 				if len(toolCalls) > 1 {
 					events <- StreamEvent{Type: "tool_batch_start", BatchSize: len(toolCalls)}
 				}
 
-				var xmlResults []struct {
-					ID     string
-					Name   string
-					Result tools.ToolResult
-				}
-
+				var execResults []ToolExecution
 				for _, tc := range toolCalls {
 					events <- StreamEvent{
 						Type:     "tool_start",
 						ToolID:   tc.ID,
-						ToolName: tc.Name,
-						ToolArgs: formatArgs(tc.Arguments),
+						ToolName: tc.Function.Name,
+						ToolArgs: tc.Function.Arguments,
 					}
 
-					toolResult := registry.Execute(ctx, tc)
+					toolResult := registry.Execute(ctx, tools.ToolCall{
+						ID:        tc.ID,
+						Name:      tc.Function.Name,
+						Arguments: parseToolArgs(tc.Function.Arguments),
+					})
 
 					events <- StreamEvent{
 						Type:       "tool_result",
 						ToolID:     tc.ID,
-						ToolName:   tc.Name,
+						ToolName:   tc.Function.Name,
 						ToolResult: toolResult.Output,
 						ToolError:  !toolResult.Success,
 					}
 
-					xmlResults = append(xmlResults, struct {
-						ID     string
-						Name   string
-						Result tools.ToolResult
-					}{
+					execResults = append(execResults, ToolExecution{
 						ID:     tc.ID,
-						Name:   tc.Name,
-						Result: toolResult,
+						Name:   tc.Function.Name,
+						Args:   tc.Function.Arguments,
+						Result: toolResult.Output,
+						Error:  toolResult.Error,
 					})
 				}
 
@@ -223,15 +228,31 @@ func (e *Executor) ExecuteStream(ctx context.Context, def *AgentDefinition, user
 					events <- StreamEvent{Type: "tool_batch_end", BatchSize: len(toolCalls)}
 				}
 
-				messages = append(messages,
-					llm.Message{Role: "assistant", Content: fullResponse},
-					llm.Message{Role: "user", Content: tools.FormatToolResults(xmlResults)},
-				)
+				// Add assistant message with tool calls
+				messages = append(messages, llm.Message{
+					Role:      "assistant",
+					Content:   fullContent,
+					ToolCalls: toolCalls,
+				})
+
+				// Add tool result messages with name
+				for _, exec := range execResults {
+					resultContent := exec.Result
+					if exec.Error != "" {
+						resultContent = "Error: " + exec.Error
+					}
+					messages = append(messages, llm.Message{
+						Role:       "tool",
+						Content:    resultContent,
+						Name:       exec.Name,
+						ToolCallID: exec.ID,
+					})
+				}
 				continue
 			}
 
-			// Not a tool call - final response
-			events <- StreamEvent{Type: "done", FinalResponse: fullResponse}
+			// No tool calls - final response
+			events <- StreamEvent{Type: "done", FinalResponse: fullContent}
 			return
 		}
 
@@ -278,6 +299,7 @@ func (e *Executor) buildRegistry(def *AgentDefinition) *tools.Registry {
 }
 
 // buildSystemPrompt creates the system prompt for the agent
+// Note: Tool definitions are passed separately via the native tool calling API.
 func (e *Executor) buildSystemPrompt(def *AgentDefinition, registry *tools.Registry) string {
 	var sb strings.Builder
 
@@ -289,30 +311,10 @@ func (e *Executor) buildSystemPrompt(def *AgentDefinition, registry *tools.Regis
 	cwd, _ := os.Getwd()
 	sb.WriteString(fmt.Sprintf("Current working directory: %s\n\n", cwd))
 
-	// Add available tools section
-	sb.WriteString("AVAILABLE TOOLS:\n")
-	for i, toolDef := range registry.List() {
-		sb.WriteString(fmt.Sprintf("%d. %s - %s\n", i+1, toolDef.Name, toolDef.Description))
-	}
-	sb.WriteString("\n")
-
-	// Add tool calling format
-	sb.WriteString("TOOL CALLING FORMAT:\n")
-	sb.WriteString("Use this XML format when calling tools:\n")
-	sb.WriteString("```xml\n")
-	sb.WriteString("<tool_call>\n")
-	sb.WriteString("  <id>call_1</id>\n")
-	sb.WriteString("  <name>tool_name</name>\n")
-	sb.WriteString("  <parameters>\n")
-	sb.WriteString("    <param>value</param>\n")
-	sb.WriteString("  </parameters>\n")
-	sb.WriteString("</tool_call>\n")
-	sb.WriteString("```\n\n")
-
 	// Add handoff instructions if enabled
 	if def.HandoffTo != "" {
 		sb.WriteString("HANDOFF:\n")
-		sb.WriteString(fmt.Sprintf("When you need to hand off to another agent, use this format:\n"))
+		sb.WriteString("When you need to hand off to another agent, use this format:\n")
 		sb.WriteString("```xml\n")
 		sb.WriteString(fmt.Sprintf("<handoff agent=\"%s\" reason=\"Your reason here\">\n", def.HandoffTo))
 		sb.WriteString("  <context key=\"key_name\">value</context>\n")
@@ -323,17 +325,21 @@ func (e *Executor) buildSystemPrompt(def *AgentDefinition, registry *tools.Regis
 	return sb.String()
 }
 
-// executeToolCalls executes multiple tool calls
-func (e *Executor) executeToolCalls(ctx context.Context, registry *tools.Registry, toolCalls []tools.ToolCall) []ToolExecution {
+// executeNativeToolCalls executes multiple OpenAI-format tool calls
+func (e *Executor) executeNativeToolCalls(ctx context.Context, registry *tools.Registry, toolCalls []llm.OpenAIToolCall) []ToolExecution {
 	results := make([]ToolExecution, len(toolCalls))
 
 	for i, tc := range toolCalls {
-		toolResult := registry.Execute(ctx, tc)
+		toolResult := registry.Execute(ctx, tools.ToolCall{
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: parseToolArgs(tc.Function.Arguments),
+		})
 
 		results[i] = ToolExecution{
 			ID:     tc.ID,
-			Name:   tc.Name,
-			Args:   formatArgs(tc.Arguments),
+			Name:   tc.Function.Name,
+			Args:   tc.Function.Arguments,
 			Result: toolResult.Output,
 			Error:  toolResult.Error,
 		}
@@ -342,11 +348,14 @@ func (e *Executor) executeToolCalls(ctx context.Context, registry *tools.Registr
 	return results
 }
 
-// formatArgs formats tool arguments for display
-func formatArgs(args map[string]any) string {
-	parts := make([]string, 0, len(args))
-	for k, v := range args {
-		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+// parseToolArgs parses JSON arguments into a map
+func parseToolArgs(argsJSON string) map[string]any {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		if os.Getenv("ZCODE_DEBUG") != "" {
+			fmt.Fprintf(os.Stderr, "[DEBUG parseToolArgs] failed to parse: %v, input: %q\n", err, argsJSON)
+		}
+		return make(map[string]any)
 	}
-	return strings.Join(parts, ", ")
+	return args
 }

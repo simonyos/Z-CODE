@@ -27,11 +27,14 @@ It features a beautiful terminal user interface with tool calling capabilities
 for file operations and shell commands.
 
 Supported providers:
-  claude     - Claude Code CLI (default)
-  gemini     - Gemini CLI
   openai     - OpenAI API (requires OPENAI_API_KEY)
   openrouter - OpenRouter API (requires OPENROUTER_API_KEY)
-  litellm    - LiteLLM Proxy (unified interface to 100+ LLMs)`,
+  litellm    - LiteLLM Proxy (unified interface to 100+ LLMs) [default]
+
+Note: 'claude' and 'gemini' CLI providers were removed in v2.0.
+Use 'litellm' or 'openrouter' with Claude/Gemini models instead:
+  zcode -p litellm -m anthropic/claude-3.5-sonnet
+  zcode -p litellm -m google/gemini-flash-1.5`,
 	Run: runChat,
 }
 
@@ -45,7 +48,7 @@ func runChat(cmd *cobra.Command, args []string) {
 		selectedProvider = cfg.DefaultProvider
 	}
 	if selectedProvider == "" {
-		selectedProvider = "claude"
+		selectedProvider = "litellm"
 	}
 
 	selectedModel := modelFlag
@@ -72,12 +75,6 @@ func runChat(cmd *cobra.Command, args []string) {
 		}
 		provider = llm.NewOpenRouter(model)
 		modelName = model
-	case "gemini":
-		provider = llm.NewGeminiCLI()
-		modelName = "gemini"
-	case "claude":
-		provider = llm.NewClaudeCLI()
-		modelName = "claude"
 	case "litellm":
 		model := selectedModel
 		if model == "" {
@@ -85,9 +82,17 @@ func runChat(cmd *cobra.Command, args []string) {
 		}
 		provider = llm.NewLiteLLM(model)
 		modelName = model
+	case "claude", "gemini":
+		fmt.Printf("Provider '%s' was removed in v2.0\n", selectedProvider)
+		fmt.Println("")
+		fmt.Println("Use 'litellm' or 'openrouter' with Claude/Gemini models instead:")
+		fmt.Println("  zcode -p litellm -m anthropic/claude-3.5-sonnet")
+		fmt.Println("  zcode -p litellm -m google/gemini-flash-1.5")
+		fmt.Println("  zcode -p openrouter -m anthropic/claude-3.5-sonnet")
+		os.Exit(1)
 	default:
 		fmt.Printf("Unknown provider: %s\n", selectedProvider)
-		fmt.Println("Supported providers: claude, gemini, openai, openrouter, litellm")
+		fmt.Println("Supported providers: openai, openrouter, litellm")
 		os.Exit(1)
 	}
 
