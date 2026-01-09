@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/simonyos/Z-CODE/internal/llm"
@@ -71,20 +72,22 @@ type EventHandler interface {
 
 // Agent orchestrates the LLM and tools
 type Agent struct {
-	provider      llm.Provider
-	registry      *tools.Registry
-	messages      []llm.Message
-	handler       EventHandler
-	maxIterations int
+	provider       llm.Provider
+	registry       *tools.Registry
+	messages       []llm.Message
+	handler        EventHandler
+	maxIterations  int
+	maxToolRetries int
 }
 
 // AgentConfig holds configuration for creating a custom agent
 type AgentConfig struct {
-	Provider      llm.Provider
-	ConfirmFn     tools.ConfirmFunc
-	SystemPrompt  string   // Custom system prompt (empty = default)
-	MaxIterations int      // Max LLM calls per conversation (0 = default 10)
-	AllowedTools  []string // Tool names to enable (empty = all tools)
+	Provider       llm.Provider
+	ConfirmFn      tools.ConfirmFunc
+	SystemPrompt   string   // Custom system prompt (empty = default)
+	MaxIterations  int      // Max LLM calls per conversation (0 = default 10)
+	AllowedTools   []string // Tool names to enable (empty = all tools)
+	MaxToolRetries int      // Max retries for failed tool calls (0 = default 3)
 }
 
 // New creates a new agent with the given provider
@@ -101,9 +104,10 @@ func New(provider llm.Provider, confirmFn tools.ConfirmFunc) *Agent {
 	reg.Register(tools.NewGrepTool())
 
 	return &Agent{
-		provider:      provider,
-		registry:      reg,
-		maxIterations: 10,
+		provider:       provider,
+		registry:       reg,
+		maxIterations:  10,
+		maxToolRetries: 3,
 		messages: []llm.Message{
 			{Role: "system", Content: reg.BuildSystemPrompt()},
 		},
@@ -152,10 +156,17 @@ func NewWithConfig(cfg AgentConfig) *Agent {
 		maxIter = 10
 	}
 
+	// Determine max tool retries
+	maxRetries := cfg.MaxToolRetries
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+
 	return &Agent{
-		provider:      cfg.Provider,
-		registry:      reg,
-		maxIterations: maxIter,
+		provider:       cfg.Provider,
+		registry:       reg,
+		maxIterations:  maxIter,
+		maxToolRetries: maxRetries,
 		messages: []llm.Message{
 			{Role: "system", Content: systemPrompt},
 		},
@@ -179,27 +190,82 @@ func (a *Agent) AddTool(tool tools.Tool) {
 	a.messages[0].Content = a.registry.BuildSystemPrompt()
 }
 
-// Chat sends a message and returns the response with tool execution info
+// Chat sends a message and returns the response with tool execution info.
+// All providers must implement ToolProvider for native tool calling support.
 func (a *Agent) Chat(ctx context.Context, userMessage string) (*ChatResult, error) {
+	toolProvider, ok := a.provider.(llm.ToolProvider)
+	if !ok {
+		return nil, fmt.Errorf("provider does not support native tool calling (must implement ToolProvider interface)")
+	}
+	return a.chatWithNativeTools(ctx, userMessage, toolProvider)
+}
+
+// chatWithNativeTools uses the provider's native tool calling API
+func (a *Agent) chatWithNativeTools(ctx context.Context, userMessage string, toolProvider llm.ToolProvider) (*ChatResult, error) {
 	a.messages = append(a.messages, llm.Message{Role: "user", Content: userMessage})
 
 	result := &ChatResult{
 		ToolCalls: []ToolExecution{},
 	}
 
+	// Get tool definitions in OpenAI format (already returns []llm.OpenAITool)
+	llmTools := a.registry.GetOpenAIToolDefinitions()
+
+	retryCount := 0 // Total retries allowed per Chat() call
+
 	for i := 0; i < a.maxIterations; i++ {
 		if a.handler != nil {
 			a.handler.OnThinking()
 		}
 
-		response, err := a.provider.Generate(ctx, a.messages)
+		response, err := toolProvider.GenerateWithTools(ctx, a.messages, llmTools)
 		if err != nil {
 			return nil, err
 		}
 
-		// Try to parse as tool calls (supports multiple)
-		toolCalls, err := tools.ParseToolCalls(response)
-		if err == nil && len(toolCalls) > 0 {
+		// Check if model returned tool calls
+		if len(response.ToolCalls) > 0 {
+			// Convert OpenAI tool calls to our ToolCall format with retry on parse failure
+			var toolCalls []tools.ToolCall
+			var parseErrors []string
+
+			for _, tc := range response.ToolCalls {
+				// Parse arguments JSON
+				var args map[string]any
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+					parseErrors = append(parseErrors, fmt.Sprintf(
+						"Tool '%s' (id: %s): failed to parse arguments: %v. Raw: %s",
+						tc.Function.Name, tc.ID, err, tc.Function.Arguments,
+					))
+					continue
+				}
+				toolCalls = append(toolCalls, tools.ToolCall{
+					ID:        tc.ID,
+					Name:      tc.Function.Name,
+					Arguments: args,
+				})
+			}
+
+			// If there were parse errors, inject error message and retry
+			if len(parseErrors) > 0 && len(toolCalls) == 0 {
+				retryCount++
+				if retryCount > a.maxToolRetries {
+					return nil, fmt.Errorf("max tool retries exceeded. Last errors:\n%s",
+						strings.Join(parseErrors, "\n"))
+				}
+
+				// Inject error message for the model to fix
+				errorMsg := fmt.Sprintf(
+					"Tool call failed due to malformed arguments. Please fix and try again:\n%s",
+					strings.Join(parseErrors, "\n"),
+				)
+				a.messages = append(a.messages,
+					llm.Message{Role: "assistant", Content: response.Content},
+					llm.Message{Role: "user", Content: errorMsg},
+				)
+				continue
+			}
+
 			// Execute tool calls (parallel if multiple)
 			execResults := a.executeToolCalls(ctx, toolCalls)
 
@@ -208,40 +274,35 @@ func (a *Agent) Chat(ctx context.Context, userMessage string) (*ChatResult, erro
 				result.ToolCalls = append(result.ToolCalls, exec)
 			}
 
-			// Build XML results for message history
-			var xmlResults []struct {
-				ID     string
-				Name   string
-				Result tools.ToolResult
+			// Build tool results for message history (OpenAI format)
+			// Add assistant message with tool calls
+			assistantMsg := llm.Message{
+				Role:      "assistant",
+				Content:   response.Content,
+				ToolCalls: response.ToolCalls,
 			}
+			a.messages = append(a.messages, assistantMsg)
+
+			// Add tool result messages with proper tool_call_id and name
 			for _, exec := range execResults {
-				xmlResults = append(xmlResults, struct {
-					ID     string
-					Name   string
-					Result tools.ToolResult
-				}{
-					ID:   exec.ID,
-					Name: exec.Name,
-					Result: tools.ToolResult{
-						Success: exec.Error == "",
-						Output:  exec.Result,
-						Error:   exec.Error,
-					},
+				content := exec.Result
+				if exec.Error != "" {
+					content = "Error: " + exec.Error
+				}
+				a.messages = append(a.messages, llm.Message{
+					Role:       "tool",
+					Content:    content,
+					Name:       exec.Name,
+					ToolCallID: exec.ID,
 				})
 			}
-
-			// Add tool interaction to history using XML format
-			a.messages = append(a.messages,
-				llm.Message{Role: "assistant", Content: response},
-				llm.Message{Role: "user", Content: tools.FormatToolResults(xmlResults)},
-			)
 
 			continue
 		}
 
-		// Not a tool call - final response
-		a.messages = append(a.messages, llm.Message{Role: "assistant", Content: response})
-		result.Response = response
+		// No tool calls - final response
+		a.messages = append(a.messages, llm.Message{Role: "assistant", Content: response.Content})
+		result.Response = response.Content
 		return result, nil
 	}
 
@@ -362,7 +423,23 @@ func (a *Agent) Reset() {
 // When multiple tools are requested, tool_batch_start and tool_batch_end events
 // are emitted to indicate the grouping, but tools within the batch still execute
 // sequentially (not in parallel) for predictable streaming output.
+//
+// All providers must implement ToolProvider for native tool calling support.
 func (a *Agent) ChatStream(ctx context.Context, userMessage string) <-chan StreamEvent {
+	toolProvider, ok := a.provider.(llm.ToolProvider)
+	if !ok {
+		events := make(chan StreamEvent)
+		go func() {
+			events <- StreamEvent{Type: "error", Error: fmt.Errorf("provider does not support native tool calling (must implement ToolProvider interface)")}
+			close(events)
+		}()
+		return events
+	}
+	return a.chatStreamWithNativeTools(ctx, userMessage, toolProvider)
+}
+
+// chatStreamWithNativeTools uses the provider's native streaming tool calling API
+func (a *Agent) chatStreamWithNativeTools(ctx context.Context, userMessage string, toolProvider llm.ToolProvider) <-chan StreamEvent {
 	events := make(chan StreamEvent)
 
 	go func() {
@@ -372,15 +449,22 @@ func (a *Agent) ChatStream(ctx context.Context, userMessage string) <-chan Strea
 
 		events <- StreamEvent{Type: "start"}
 
+		// Get tool definitions in OpenAI format (already returns []llm.OpenAITool)
+		llmTools := a.registry.GetOpenAIToolDefinitions()
+
+		retryCount := 0 // Total retries allowed per ChatStream() call
+
 		for i := 0; i < a.maxIterations; i++ {
-			// Use streaming generation
-			chunks, err := a.provider.GenerateStream(ctx, a.messages)
+			// Use streaming generation with tools
+			chunks, err := toolProvider.GenerateStreamWithTools(ctx, a.messages, llmTools)
 			if err != nil {
 				events <- StreamEvent{Type: "error", Error: err}
 				return
 			}
 
 			var fullResponse string
+			var toolCalls []llm.OpenAIToolCall
+
 			for chunk := range chunks {
 				if chunk.Error != nil {
 					events <- StreamEvent{Type: "error", Error: chunk.Error}
@@ -389,79 +473,118 @@ func (a *Agent) ChatStream(ctx context.Context, userMessage string) <-chan Strea
 
 				if chunk.Done {
 					fullResponse = chunk.Text
-				} else {
+					toolCalls = chunk.ToolCalls
+				} else if chunk.Text != "" {
 					// Stream the chunk to UI
 					events <- StreamEvent{Type: "chunk", Text: chunk.Text}
 				}
 			}
 
-			// Try to parse as tool calls (supports multiple)
-			toolCalls, err := tools.ParseToolCalls(fullResponse)
-			if err == nil && len(toolCalls) > 0 {
+			// Check if model returned tool calls
+			if len(toolCalls) > 0 {
+				// Parse and validate tool calls with retry on failure
+				var parsedToolCalls []tools.ToolCall
+				var parseErrors []string
+
+				for _, tc := range toolCalls {
+					var args map[string]any
+					if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+						parseErrors = append(parseErrors, fmt.Sprintf(
+							"Tool '%s' (id: %s): failed to parse arguments: %v",
+							tc.Function.Name, tc.ID, err,
+						))
+						continue
+					}
+					parsedToolCalls = append(parsedToolCalls, tools.ToolCall{
+						ID:        tc.ID,
+						Name:      tc.Function.Name,
+						Arguments: args,
+					})
+				}
+
+				// If all tool calls failed to parse, retry
+				if len(parseErrors) > 0 && len(parsedToolCalls) == 0 {
+					retryCount++
+					if retryCount > a.maxToolRetries {
+						events <- StreamEvent{
+							Type:  "error",
+							Error: fmt.Errorf("max tool retries exceeded: %s", strings.Join(parseErrors, "; ")),
+						}
+						return
+					}
+
+					// Inject error message for retry
+					errorMsg := fmt.Sprintf(
+						"Tool call failed due to malformed arguments. Please fix and try again:\n%s",
+						strings.Join(parseErrors, "\n"),
+					)
+					a.messages = append(a.messages,
+						llm.Message{Role: "assistant", Content: fullResponse},
+						llm.Message{Role: "user", Content: errorMsg},
+					)
+					continue
+				}
+
+				// Add assistant message with tool calls to history FIRST
+				a.messages = append(a.messages, llm.Message{
+					Role:      "assistant",
+					Content:   fullResponse,
+					ToolCalls: toolCalls,
+				})
+
 				// Notify about batch start if multiple tools
-				if len(toolCalls) > 1 {
+				if len(parsedToolCalls) > 1 {
 					events <- StreamEvent{
 						Type:      "tool_batch_start",
-						BatchSize: len(toolCalls),
+						BatchSize: len(parsedToolCalls),
 					}
 				}
 
 				// Execute tool calls and stream results
-				var xmlResults []struct {
-					ID     string
-					Name   string
-					Result tools.ToolResult
-				}
-
-				for _, tc := range toolCalls {
+				for _, toolCall := range parsedToolCalls {
 					// Format args for display
-					argsStr := formatArgs(tc.Name, tc.Arguments)
+					argsStr := formatArgs(toolCall.Name, toolCall.Arguments)
 
 					// Notify about tool start
 					events <- StreamEvent{
 						Type:     "tool_start",
-						ToolID:   tc.ID,
-						ToolName: tc.Name,
+						ToolID:   toolCall.ID,
+						ToolName: toolCall.Name,
 						ToolArgs: argsStr,
 					}
 
 					// Execute tool
-					toolResult := a.registry.Execute(ctx, tc)
+					toolResult := a.registry.Execute(ctx, toolCall)
 
 					// Notify about tool result
 					events <- StreamEvent{
 						Type:       "tool_result",
-						ToolID:     tc.ID,
-						ToolName:   tc.Name,
+						ToolID:     toolCall.ID,
+						ToolName:   toolCall.Name,
 						ToolResult: toolResult.Output,
 						ToolError:  !toolResult.Success,
 					}
 
-					// Collect results for XML formatting
-					xmlResults = append(xmlResults, struct {
-						ID     string
-						Name   string
-						Result tools.ToolResult
-					}{
-						ID:     tc.ID,
-						Name:   tc.Name,
-						Result: toolResult,
+					// Add tool result to message history with proper tool_call_id and name
+					content := toolResult.Output
+					if toolResult.Error != "" {
+						content = "Error: " + toolResult.Error
+					}
+					a.messages = append(a.messages, llm.Message{
+						Role:       "tool",
+						Content:    content,
+						Name:       toolCall.Name,
+						ToolCallID: toolCall.ID,
 					})
 				}
 
 				// Notify about batch end if multiple tools
-				if len(toolCalls) > 1 {
+				if len(parsedToolCalls) > 1 {
 					events <- StreamEvent{
 						Type:      "tool_batch_end",
-						BatchSize: len(toolCalls),
+						BatchSize: len(parsedToolCalls),
 					}
 				}
-
-				// Add tool interaction to history using XML format
-				a.messages = append(a.messages,
-					llm.Message{Role: "assistant", Content: fullResponse},
-					llm.Message{Role: "user", Content: tools.FormatToolResults(xmlResults)},
-				)
 
 				continue
 			}

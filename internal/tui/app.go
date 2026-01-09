@@ -424,6 +424,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 
+	case streamContinueMsg:
+		// Continue reading events for unhandled event types (batch markers, etc.)
+		cmds = append(cmds, readNextEvent(msg.events))
+
 	// Custom agent event handlers
 	case customAgentEventChanMsg:
 		m.customEventChan = msg.events
@@ -506,6 +510,11 @@ type streamEventChanMsg struct {
 	events <-chan agent.StreamEvent
 }
 
+// streamContinueMsg signals to continue reading events for unhandled event types
+type streamContinueMsg struct {
+	events <-chan agent.StreamEvent
+}
+
 // readNextEvent reads the next event from the channel
 func readNextEvent(events <-chan agent.StreamEvent) tea.Cmd {
 	return func() tea.Msg {
@@ -532,8 +541,13 @@ func readNextEvent(events <-chan agent.StreamEvent) tea.Cmd {
 			return streamDoneMsg{finalResponse: event.FinalResponse}
 		case "error":
 			return responseMsg{err: event.Error}
+		case "tool_batch_start", "tool_batch_end":
+			// Skip batch markers, continue reading next event
+			return streamContinueMsg{events: events}
+		default:
+			// Unknown event type, continue reading
+			return streamContinueMsg{events: events}
 		}
-		return nil
 	}
 }
 
