@@ -233,9 +233,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			if m.showHelp {
 				m.showHelp = false
+				return m, nil
 			}
 			if m.suggestions.IsVisible() {
 				m.suggestions.Hide()
+				return m, nil
+			}
+			// Interrupt current LLM response if thinking
+			if m.thinking {
+				m.thinking = false
+				m.status.SetThinking(false)
+				m.streamingContent = ""
+				m.eventChan = nil
+				if m.messages != nil {
+					m.messages.ClearStreaming()
+					m.messages.AddMessage(components.Message{
+						Role:    "system",
+						Content: "⛔ Interrupted",
+					})
+				}
+				return m, nil
 			}
 			return m, nil
 
@@ -410,6 +427,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, readNextEvent(m.eventChan))
 		}
 
+	case streamBatchStartMsg:
+		// Start of a batch of tool calls - clear streaming content
+		m.streamingContent = ""
+		m.messages.ClearStreaming()
+		if m.eventChan != nil {
+			cmds = append(cmds, readNextEvent(m.eventChan))
+		}
+
+	case streamBatchEndMsg:
+		// End of a batch - continue reading for potential next iteration
+		if m.eventChan != nil {
+			cmds = append(cmds, readNextEvent(m.eventChan))
+		}
+
 	case streamDoneMsg:
 		m.thinking = false
 		m.status.SetThinking(false)
@@ -506,13 +537,30 @@ type streamEventChanMsg struct {
 	events <-chan agent.StreamEvent
 }
 
+// streamBatchStartMsg indicates start of a batch of tool calls
+type streamBatchStartMsg struct {
+	batchSize int
+}
+
+// streamBatchEndMsg indicates end of a batch of tool calls
+type streamBatchEndMsg struct {
+	batchSize int
+}
+
 // readNextEvent reads the next event from the channel
 func readNextEvent(events <-chan agent.StreamEvent) tea.Cmd {
 	return func() tea.Msg {
 		event, ok := <-events
 		if !ok {
 			// Channel closed
+			if os.Getenv("ZCODE_DEBUG") != "" {
+				fmt.Fprintf(os.Stderr, "[DEBUG] readNextEvent: channel closed\n")
+			}
 			return streamDoneMsg{}
+		}
+
+		if os.Getenv("ZCODE_DEBUG") != "" && event.Type != "chunk" {
+			fmt.Fprintf(os.Stderr, "[DEBUG] readNextEvent: type=%s\n", event.Type)
 		}
 
 		switch event.Type {
@@ -520,9 +568,25 @@ func readNextEvent(events <-chan agent.StreamEvent) tea.Cmd {
 			return streamStartMsg{}
 		case "chunk":
 			return streamChunkMsg{text: event.Text}
+		case "tool_batch_start":
+			if os.Getenv("ZCODE_DEBUG") != "" {
+				fmt.Fprintf(os.Stderr, "[DEBUG] readNextEvent: tool_batch_start size=%d\n", event.BatchSize)
+			}
+			return streamBatchStartMsg{batchSize: event.BatchSize}
+		case "tool_batch_end":
+			if os.Getenv("ZCODE_DEBUG") != "" {
+				fmt.Fprintf(os.Stderr, "[DEBUG] readNextEvent: tool_batch_end size=%d\n", event.BatchSize)
+			}
+			return streamBatchEndMsg{batchSize: event.BatchSize}
 		case "tool_start":
+			if os.Getenv("ZCODE_DEBUG") != "" {
+				fmt.Fprintf(os.Stderr, "[DEBUG] readNextEvent: tool_start name=%s, args=%s\n", event.ToolName, event.ToolArgs)
+			}
 			return streamToolStartMsg{name: event.ToolName, args: event.ToolArgs}
 		case "tool_result":
+			if os.Getenv("ZCODE_DEBUG") != "" {
+				fmt.Fprintf(os.Stderr, "[DEBUG] readNextEvent: tool_result name=%s, error=%v\n", event.ToolName, event.ToolError)
+			}
 			return streamToolResultMsg{
 				name:    event.ToolName,
 				result:  event.ToolResult,

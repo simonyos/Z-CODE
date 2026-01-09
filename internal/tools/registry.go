@@ -204,34 +204,113 @@ func ParseToolCalls(text string) ([]ToolCall, error) {
 	if matches := multipleToolCallPattern.FindStringSubmatch(text); len(matches) > 1 {
 		xmlContent := "<tool_calls>" + matches[1] + "</tool_calls>"
 		var wrapper xmlToolCalls
-		if err := xml.Unmarshal([]byte(xmlContent), &wrapper); err != nil {
-			return nil, fmt.Errorf("failed to parse tool_calls XML: %w", err)
-		}
-		for _, tc := range wrapper.Calls {
-			call, err := parseXMLToolCall(tc)
-			if err != nil {
-				return nil, err
+		if err := xml.Unmarshal([]byte(xmlContent), &wrapper); err == nil && len(wrapper.Calls) > 0 {
+			// Try structured parsing
+			allParsed := true
+			for _, tc := range wrapper.Calls {
+				call, err := parseXMLToolCall(tc)
+				if err != nil {
+					allParsed = false
+					break
+				}
+				calls = append(calls, call)
 			}
-			calls = append(calls, call)
+			if allParsed && len(calls) > 0 {
+				return calls, nil
+			}
+			// Reset and fall through to malformed parser
+			calls = nil
 		}
-		return calls, nil
+		// Fall through to malformed parser if structured parsing fails
 	}
 
 	// Try to find single <tool_call> using pre-compiled pattern
 	if matches := singleToolCallPattern.FindStringSubmatch(text); len(matches) > 1 {
 		xmlContent := "<tool_call>" + matches[1] + "</tool_call>"
 		var tc xmlToolCall
-		if err := xml.Unmarshal([]byte(xmlContent), &tc); err != nil {
-			return nil, fmt.Errorf("failed to parse tool_call XML: %w", err)
+		if err := xml.Unmarshal([]byte(xmlContent), &tc); err == nil {
+			// Only use structured parsing if XML unmarshal succeeds
+			call, err := parseXMLToolCall(tc)
+			if err == nil {
+				return []ToolCall{call}, nil
+			}
+			// Fall through to malformed parser if parseXMLToolCall fails
 		}
-		call, err := parseXMLToolCall(tc)
-		if err != nil {
-			return nil, err
-		}
-		return []ToolCall{call}, nil
+		// Fall through to malformed parser if XML unmarshal fails
+	}
+
+	// Fallback: Try to parse malformed tool calls like "<tool_call> call_1 read_file README.md </tool_call>"
+	// This handles cases where LLMs output abbreviated/flattened format
+	if calls := parseMalformedToolCalls(text); len(calls) > 0 {
+		return calls, nil
 	}
 
 	return nil, fmt.Errorf("no tool_call or tool_calls XML found")
+}
+
+// parseMalformedToolCalls attempts to extract tool calls from malformed XML
+// Handles formats like: <tool_call> call_1 read_file path/to/file </tool_call>
+func parseMalformedToolCalls(text string) []ToolCall {
+	var calls []ToolCall
+
+	// Pattern to match malformed tool_call content
+	// Captures content between <tool_call> and </tool_call>
+	malformedPattern := regexp.MustCompile(`<tool_call>\s*([^<]+?)\s*</tool_call>`)
+	matches := malformedPattern.FindAllStringSubmatch(text, -1)
+
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		content := strings.TrimSpace(match[1])
+		parts := strings.Fields(content)
+
+		if len(parts) < 2 {
+			continue
+		}
+
+		// Expected format: ID NAME [ARGS...]
+		toolID := parts[0]
+		toolName := parts[1]
+
+		// Map common tool names to their expected parameter names
+		args := make(map[string]any)
+		if len(parts) > 2 {
+			argValue := strings.Join(parts[2:], " ")
+			// Determine parameter name based on tool
+			switch toolName {
+			case "read_file", "list_dir", "glob":
+				args["path"] = argValue
+			case "grep":
+				args["pattern"] = argValue
+			case "bash":
+				args["command"] = argValue
+			case "write_file":
+				args["path"] = argValue
+			case "edit_file":
+				args["path"] = argValue
+			case "ask_agent":
+				// For ask_agent, first extra arg is role, rest is message
+				args["role"] = parts[2]
+				if len(parts) > 3 {
+					args["message"] = strings.Join(parts[3:], " ")
+				}
+			case "broadcast":
+				args["message"] = argValue
+			default:
+				// Generic fallback - use first parameter
+				args["input"] = argValue
+			}
+		}
+
+		calls = append(calls, ToolCall{
+			ID:        toolID,
+			Name:      toolName,
+			Arguments: args,
+		})
+	}
+
+	return calls
 }
 
 // parseXMLToolCall converts an xmlToolCall to a ToolCall

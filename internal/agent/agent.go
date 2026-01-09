@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 
 	"github.com/simonyos/Z-CODE/internal/llm"
@@ -353,6 +354,28 @@ func (a *Agent) Reset() {
 	a.messages = a.messages[:1] // Keep only system prompt
 }
 
+// SetSystemPromptPrefix prepends content to the system prompt
+func (a *Agent) SetSystemPromptPrefix(prefix string) {
+	if len(a.messages) > 0 && a.messages[0].Role == "system" {
+		a.messages[0].Content = prefix + "\n\n" + a.messages[0].Content
+	}
+}
+
+// SetSystemPromptSuffix appends content to the system prompt
+func (a *Agent) SetSystemPromptSuffix(suffix string) {
+	if len(a.messages) > 0 && a.messages[0].Role == "system" {
+		a.messages[0].Content = a.messages[0].Content + "\n\n" + suffix
+	}
+}
+
+// GetSystemPrompt returns the current system prompt
+func (a *Agent) GetSystemPrompt() string {
+	if len(a.messages) > 0 && a.messages[0].Role == "system" {
+		return a.messages[0].Content
+	}
+	return ""
+}
+
 // ChatStream sends a message and streams the response through a channel.
 // Unlike Chat(), tool calls are executed sequentially rather than in parallel.
 // This is intentional to ensure proper event ordering for streaming UI updates:
@@ -381,7 +404,9 @@ func (a *Agent) ChatStream(ctx context.Context, userMessage string) <-chan Strea
 			}
 
 			var fullResponse string
+			chunkCount := 0
 			for chunk := range chunks {
+				chunkCount++
 				if chunk.Error != nil {
 					events <- StreamEvent{Type: "error", Error: chunk.Error}
 					return
@@ -389,6 +414,9 @@ func (a *Agent) ChatStream(ctx context.Context, userMessage string) <-chan Strea
 
 				if chunk.Done {
 					fullResponse = chunk.Text
+					if os.Getenv("ZCODE_DEBUG") != "" {
+						fmt.Fprintf(os.Stderr, "[DEBUG] Stream done, chunks=%d, fullResponse_len=%d\n", chunkCount, len(fullResponse))
+					}
 				} else {
 					// Stream the chunk to UI
 					events <- StreamEvent{Type: "chunk", Text: chunk.Text}
@@ -397,7 +425,17 @@ func (a *Agent) ChatStream(ctx context.Context, userMessage string) <-chan Strea
 
 			// Try to parse as tool calls (supports multiple)
 			toolCalls, err := tools.ParseToolCalls(fullResponse)
+			// Debug: Log parse result when ZCODE_DEBUG is set
+			if os.Getenv("ZCODE_DEBUG") != "" {
+				fmt.Fprintf(os.Stderr, "[DEBUG] ParseToolCalls: found=%d, err=%v, response_len=%d\n", len(toolCalls), err, len(fullResponse))
+				if len(fullResponse) < 500 {
+					fmt.Fprintf(os.Stderr, "[DEBUG] fullResponse: %q\n", fullResponse)
+				}
+			}
 			if err == nil && len(toolCalls) > 0 {
+				if os.Getenv("ZCODE_DEBUG") != "" {
+					fmt.Fprintf(os.Stderr, "[DEBUG] About to execute %d tool calls\n", len(toolCalls))
+				}
 				// Notify about batch start if multiple tools
 				if len(toolCalls) > 1 {
 					events <- StreamEvent{
@@ -414,6 +452,9 @@ func (a *Agent) ChatStream(ctx context.Context, userMessage string) <-chan Strea
 				}
 
 				for _, tc := range toolCalls {
+					if os.Getenv("ZCODE_DEBUG") != "" {
+						fmt.Fprintf(os.Stderr, "[DEBUG] Executing tool: %s (id=%s, args=%v)\n", tc.Name, tc.ID, tc.Arguments)
+					}
 					// Format args for display
 					argsStr := formatArgs(tc.Name, tc.Arguments)
 
@@ -427,6 +468,9 @@ func (a *Agent) ChatStream(ctx context.Context, userMessage string) <-chan Strea
 
 					// Execute tool
 					toolResult := a.registry.Execute(ctx, tc)
+					if os.Getenv("ZCODE_DEBUG") != "" {
+						fmt.Fprintf(os.Stderr, "[DEBUG] Tool result: success=%v, output_len=%d, err=%s\n", toolResult.Success, len(toolResult.Output), toolResult.Error)
+					}
 
 					// Notify about tool result
 					events <- StreamEvent{

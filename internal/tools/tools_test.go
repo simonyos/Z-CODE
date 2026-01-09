@@ -192,6 +192,76 @@ func TestParseToolCall_BackwardCompatibility(t *testing.T) {
 	}
 }
 
+func TestParseToolCalls_MalformedXML(t *testing.T) {
+	// Test parsing malformed/abbreviated XML that some LLMs produce
+	tests := []struct {
+		name       string
+		input      string
+		wantCount  int
+		wantFirst  string
+		wantSecond string
+	}{
+		{
+			name:       "single malformed tool call",
+			input:      `<tool_call> call_1 read_file README.md </tool_call>`,
+			wantCount:  1,
+			wantFirst:  "read_file",
+			wantSecond: "",
+		},
+		{
+			name:       "multiple malformed tool calls in tool_calls wrapper",
+			input:      `<tool_calls> <tool_call> call_2 read_file  README.md  </tool_call> <tool_call> call_3 list_dir  internal </tool_call> </tool_calls>`,
+			wantCount:  2,
+			wantFirst:  "read_file",
+			wantSecond: "list_dir",
+		},
+		{
+			name:       "malformed with extra whitespace",
+			input:      `<tool_call>   call_5   bash   ls -la   </tool_call>`,
+			wantCount:  1,
+			wantFirst:  "bash",
+			wantSecond: "",
+		},
+		{
+			name:       "exact swarm mode output",
+			input:      `<tool_calls> <tool_call> call_1 read_file  README.md  </tool_call> <tool_call> call_2 list_dir  .           </tool_call> </tool_calls>`,
+			wantCount:  2,
+			wantFirst:  "read_file",
+			wantSecond: "list_dir",
+		},
+		{
+			name: "malformed with surrounding text",
+			input: `I'll explore the project structure to understand what it's about.
+
+<tool_calls> <tool_call> call_1 read_file  README.md  </tool_call> <tool_call> call_2 list_dir  .           </tool_call> </tool_calls>`,
+			wantCount:  2,
+			wantFirst:  "read_file",
+			wantSecond: "list_dir",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls, err := ParseToolCalls(tt.input)
+			if err != nil {
+				t.Fatalf("ParseToolCalls() error = %v", err)
+			}
+
+			if len(calls) != tt.wantCount {
+				t.Fatalf("ParseToolCalls() returned %d calls, want %d", len(calls), tt.wantCount)
+			}
+
+			if tt.wantCount > 0 && calls[0].Name != tt.wantFirst {
+				t.Errorf("calls[0].Name = %q, want %q", calls[0].Name, tt.wantFirst)
+			}
+
+			if tt.wantCount > 1 && calls[1].Name != tt.wantSecond {
+				t.Errorf("calls[1].Name = %q, want %q", calls[1].Name, tt.wantSecond)
+			}
+		})
+	}
+}
+
 func TestFormatToolResult(t *testing.T) {
 	tests := []struct {
 		name            string
