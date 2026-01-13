@@ -3,10 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 
 	"github.com/simonyos/Z-CODE/internal/llm"
+	"github.com/simonyos/Z-CODE/internal/prompts"
 )
 
 // Registry manages tool registration and execution
@@ -120,33 +119,12 @@ func (r *Registry) Execute(ctx context.Context, call ToolCall) ToolResult {
 
 // BuildSystemPrompt generates the system prompt for the agent.
 // Tool definitions are passed separately via the native tool calling API.
+// Uses the new Cline-style prompt system with modular components.
 func (r *Registry) BuildSystemPrompt() string {
-	cwd, _ := os.Getwd()
+	return prompts.BuildSystemPrompt()
+}
 
-	var sb strings.Builder
-
-	// Core identity and capabilities
-	sb.WriteString("You are an expert software engineer and coding assistant.\n\n")
-	sb.WriteString(fmt.Sprintf("Current working directory: %s\n\n", cwd))
-
-	// Coding best practices
-	sb.WriteString("CODING GUIDELINES:\n")
-	sb.WriteString("- Write clean, maintainable code following best practices\n")
-	sb.WriteString("- Prefer editing existing files over creating new ones\n")
-	sb.WriteString("- Use edit_file for surgical changes instead of rewriting entire files\n")
-	sb.WriteString("- Read files before modifying them to understand context\n")
-	sb.WriteString("- Use glob and grep to explore the codebase before making changes\n")
-	sb.WriteString("- Keep changes minimal and focused on the task\n")
-	sb.WriteString("- Avoid excessive or redundant comments, logging, or error handling; include appropriate error checks where needed\n")
-	sb.WriteString("- Follow the existing code style and patterns in the project\n")
-	sb.WriteString("- Be careful with destructive operations (file writes, shell commands)\n\n")
-
-	// Workflow guidance
-	sb.WriteString("WORKFLOW:\n")
-	sb.WriteString("1. If you need information, use tools first (read_file, glob, grep)\n")
-	sb.WriteString("2. You can call multiple tools in parallel when they're independent\n")
-	sb.WriteString("3. After getting tool results, continue working or provide your answer\n")
-	sb.WriteString("4. Be concise and helpful in your responses\n")
-
-	return sb.String()
+// BuildSystemPromptWithRules generates the system prompt with custom user rules.
+func (r *Registry) BuildSystemPromptWithRules(customRules string) string {
+	return prompts.BuildSystemPromptWithRules(customRules)
 }
