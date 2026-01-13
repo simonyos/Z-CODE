@@ -213,7 +213,7 @@ func (a *Agent) chatWithNativeTools(ctx context.Context, userMessage string, too
 
 	retryCount := 0 // Total retries allowed per Chat() call
 
-	for i := 0; i < a.maxIterations; i++ {
+	for {
 		if a.handler != nil {
 			a.handler.OnThinking()
 		}
@@ -305,8 +305,6 @@ func (a *Agent) chatWithNativeTools(ctx context.Context, userMessage string, too
 		result.Response = response.Content
 		return result, nil
 	}
-
-	return nil, fmt.Errorf("max iterations reached")
 }
 
 // executeToolCalls executes multiple tool calls, in parallel if more than one
@@ -454,7 +452,7 @@ func (a *Agent) chatStreamWithNativeTools(ctx context.Context, userMessage strin
 
 		retryCount := 0 // Total retries allowed per ChatStream() call
 
-		for i := 0; i < a.maxIterations; i++ {
+		for {
 			// Use streaming generation with tools
 			chunks, err := toolProvider.GenerateStreamWithTools(ctx, a.messages, llmTools)
 			if err != nil {
@@ -595,7 +593,6 @@ func (a *Agent) chatStreamWithNativeTools(ctx context.Context, userMessage strin
 			return
 		}
 
-		events <- StreamEvent{Type: "error", Error: fmt.Errorf("max iterations reached")}
 	}()
 
 	return events

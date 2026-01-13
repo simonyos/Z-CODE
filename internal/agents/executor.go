@@ -81,8 +81,7 @@ func (e *Executor) Execute(ctx context.Context, def *AgentDefinition, userPrompt
 		ToolCalls: []ToolExecution{},
 	}
 
-	maxIterations := def.GetMaxIterations()
-	for i := 0; i < maxIterations; i++ {
+	for {
 		resp, err := toolProvider.GenerateWithTools(ctx, messages, openAITools)
 		if err != nil {
 			return nil, err
@@ -128,8 +127,6 @@ func (e *Executor) Execute(ctx context.Context, def *AgentDefinition, userPrompt
 		result.Response = resp.Content
 		return result, nil
 	}
-
-	return nil, fmt.Errorf("max iterations (%d) reached", maxIterations)
 }
 
 // ExecuteStream runs a custom agent with streaming output
@@ -156,8 +153,7 @@ func (e *Executor) ExecuteStream(ctx context.Context, def *AgentDefinition, user
 
 		events <- StreamEvent{Type: "start"}
 
-		maxIterations := def.GetMaxIterations()
-		for i := 0; i < maxIterations; i++ {
+		for {
 			chunks, err := toolProvider.GenerateStreamWithTools(ctx, messages, openAITools)
 			if err != nil {
 				events <- StreamEvent{Type: "error", Error: err}
@@ -256,7 +252,6 @@ func (e *Executor) ExecuteStream(ctx context.Context, def *AgentDefinition, user
 			return
 		}
 
-		events <- StreamEvent{Type: "error", Error: fmt.Errorf("max iterations reached")}
 	}()
 
 	return events
