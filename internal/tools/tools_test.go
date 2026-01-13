@@ -344,13 +344,22 @@ func TestRegistry_BuildSystemPrompt(t *testing.T) {
 
 	prompt := reg.BuildSystemPrompt()
 
-	// Check that prompt contains expected elements
+	// Check that prompt contains expected elements from Cline-style prompt
 	// Note: Tool definitions are now passed via native tool calling API, not in the system prompt
-	if !strings.Contains(prompt, "CODING GUIDELINES:") {
-		t.Error("BuildSystemPrompt() should contain 'CODING GUIDELINES:'")
+	if !strings.Contains(prompt, "You are Z-CODE") {
+		t.Error("BuildSystemPrompt() should contain 'You are Z-CODE'")
 	}
-	if !strings.Contains(prompt, "WORKFLOW:") {
-		t.Error("BuildSystemPrompt() should contain 'WORKFLOW:'")
+	if !strings.Contains(prompt, "CAPABILITIES") {
+		t.Error("BuildSystemPrompt() should contain 'CAPABILITIES'")
+	}
+	if !strings.Contains(prompt, "RULES") {
+		t.Error("BuildSystemPrompt() should contain 'RULES'")
+	}
+	if !strings.Contains(prompt, "EDITING FILES") {
+		t.Error("BuildSystemPrompt() should contain 'EDITING FILES'")
+	}
+	if !strings.Contains(prompt, "OBJECTIVE") {
+		t.Error("BuildSystemPrompt() should contain 'OBJECTIVE'")
 	}
 }
 
