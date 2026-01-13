@@ -120,13 +120,13 @@ func NewWithConfig(cfg AgentConfig) *Agent {
 
 	// Build map of all available tools
 	allTools := map[string]tools.Tool{
-		"read_file":  tools.NewReadFileTool(),
-		"list_dir":   tools.NewListDirTool(),
-		"write_file": tools.NewWriteFileTool(cfg.ConfirmFn),
-		"edit_file":  tools.NewEditTool(cfg.ConfirmFn),
+		"read_file":   tools.NewReadFileTool(),
+		"list_dir":    tools.NewListDirTool(),
+		"write_file":  tools.NewWriteFileTool(cfg.ConfirmFn),
+		"edit_file":   tools.NewEditTool(cfg.ConfirmFn),
 		"run_command": tools.NewBashTool(cfg.ConfirmFn),
-		"glob":       tools.NewGlobTool(),
-		"grep":       tools.NewGrepTool(),
+		"glob":        tools.NewGlobTool(),
+		"grep":        tools.NewGrepTool(),
 	}
 
 	// Register tools based on config
@@ -410,6 +410,28 @@ func (a *Agent) History() []llm.Message {
 // Reset clears the conversation history (keeps system prompt)
 func (a *Agent) Reset() {
 	a.messages = a.messages[:1] // Keep only system prompt
+}
+
+// SetSystemPromptPrefix prepends content to the system prompt
+func (a *Agent) SetSystemPromptPrefix(prefix string) {
+	if len(a.messages) > 0 && a.messages[0].Role == "system" {
+		a.messages[0].Content = prefix + "\n\n" + a.messages[0].Content
+	}
+}
+
+// SetSystemPromptSuffix appends content to the system prompt
+func (a *Agent) SetSystemPromptSuffix(suffix string) {
+	if len(a.messages) > 0 && a.messages[0].Role == "system" {
+		a.messages[0].Content = a.messages[0].Content + "\n\n" + suffix
+	}
+}
+
+// GetSystemPrompt returns the current system prompt
+func (a *Agent) GetSystemPrompt() string {
+	if len(a.messages) > 0 && a.messages[0].Role == "system" {
+		return a.messages[0].Content
+	}
+	return ""
 }
 
 // ChatStream sends a message and streams the response through a channel.

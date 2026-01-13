@@ -321,6 +321,90 @@ steps:
 | `on_success` | Step to jump to on success |
 | `on_failure` | Step to jump to on failure |
 
+## HiveMind Swarm Mode
+
+Run multiple AI agents collaboratively in real-time using NATS messaging.
+
+### Starting a Swarm
+
+```bash
+# Start NATS server (required for swarm communication)
+nats-server
+
+# Create a new swarm room as orchestrator
+zcode swarm --create "My Project" --role ORCH
+
+# Join an existing room with a specific role
+zcode swarm --room ABC123 --role BE_DEV
+```
+
+### Available Roles
+
+| Role | Description |
+|------|-------------|
+| `ORCH` | Orchestrator - coordinates work between agents |
+| `SA` | Solution Architect - designs system architecture |
+| `BE_DEV` | Backend Developer - implements server-side code |
+| `FE_DEV` | Frontend Developer - implements UI/UX |
+| `QA` | Quality Assurance - tests and validates |
+| `DEVOPS` | DevOps Engineer - handles deployment and infrastructure |
+| `DBA` | Database Administrator - manages data layer |
+| `SEC` | Security Engineer - handles security concerns |
+| `HUMAN` | Human supervisor with override capabilities |
+
+### Swarm Communication
+
+In swarm mode, use `@ROLE` mentions to communicate with other agents:
+
+```
+@SA Can you design the authentication flow?
+@BE_DEV Implement the API endpoints from SA's design
+@ALL Status update: Phase 1 complete
+```
+
+### Human Controls (HUMAN role only)
+
+When joined as HUMAN, you have special commands:
+
+| Command | Description |
+|---------|-------------|
+| `PAUSE [reason]` | Pause all agent autopilot |
+| `RESUME [message]` | Resume agent autopilot |
+| `OVERRIDE: @ROLE instruction` | Force an agent to execute |
+| `STATUS` | Request status from all agents |
+
+### Keyboard Shortcuts (Swarm Mode)
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+A` | Toggle autopilot mode |
+| `Ctrl+M` | Toggle swarm panel visibility |
+| `Tab` | Switch focus between chat and swarm panel |
+| `Esc` | Interrupt current LLM response |
+| `Ctrl+L` | Clear local chat |
+
+### Swarm Tools
+
+Agents in swarm mode have access to specialized tools:
+
+- `ask_agent` - Send a message to a specific agent
+- `broadcast` - Send a message to all agents
+- `list_agents` - See who's online in the room
+
+### Connection Recovery
+
+Z-Code automatically handles connection issues:
+- Automatic reconnection to NATS server
+- Presence re-announcement after reconnect
+- Visual indicators for connection state
+
+### Persistence
+
+Swarm conversations are automatically persisted to `~/.zcode/swarm/`:
+- Message history for each room
+- Agent presence state
+- Room metadata
+
 ## Handoff Mode
 
 Agents can transfer control to other agents using XML handoff tags:
@@ -350,7 +434,8 @@ Agents can transfer control to other agents using XML handoff tags:
 z-code/
 ├── cmd/
 │   ├── root.go           # CLI entry point
-│   └── config.go         # Config subcommand
+│   ├── config.go         # Config subcommand
+│   └── swarm.go          # Swarm mode command
 ├── internal/
 │   ├── agent/            # AI agent orchestration
 │   ├── agents/           # Custom agent system
@@ -370,6 +455,16 @@ z-code/
 │   │   ├── engine.go     # Workflow execution
 │   │   ├── context.go    # Shared state
 │   │   └── handoff.go    # Handoff management
+│   ├── swarm/            # HiveMind swarm system
+│   │   ├── client.go     # Main swarm client
+│   │   ├── nats.go       # NATS messaging
+│   │   ├── room.go       # Room management
+│   │   ├── roles.go      # Role definitions
+│   │   ├── message.go    # Message types
+│   │   ├── presence.go   # Presence tracking
+│   │   ├── handler.go    # Message handling
+│   │   ├── persistence.go # Room persistence
+│   │   └── errors.go     # Error definitions
 │   ├── config/           # Configuration management
 │   ├── llm/              # LLM providers
 │   │   ├── provider.go   # Provider interface
@@ -384,17 +479,25 @@ z-code/
 │   │   ├── list_dir.go
 │   │   ├── glob.go
 │   │   ├── grep.go
-│   │   └── bash.go
+│   │   ├── bash.go
+│   │   └── swarm.go      # Swarm-specific tools
 │   └── tui/              # Terminal UI
 │       ├── app.go        # Main Bubble Tea model
+│       ├── swarm_app.go  # Swarm mode TUI
 │       ├── components/   # UI components
 │       ├── layout/       # Layout management
 │       └── theme/        # Color themes
+├── roles/                # Role definition files
+│   ├── ORCH.md
+│   ├── SA.md
+│   ├── BE_DEV.md
+│   └── ...
 ├── .zcode/               # Project-local agents/skills/workflows
 │   ├── agents/
 │   ├── skills/
 │   └── workflows/
 ├── main.go
+├── Makefile              # Build and install targets
 ├── go.mod
 └── README.md
 ```
